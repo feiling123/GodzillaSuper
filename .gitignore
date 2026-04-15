@@ -1,0 +1,23 @@
+# Java
+*.class
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# Build
+build/
+target/
+out/
+
+# OS
+.DS_Store
+Thumbs.db

