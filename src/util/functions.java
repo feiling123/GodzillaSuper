@@ -37,6 +37,7 @@ import java.util.zip.*;
 public final class functions {
     private static final char[] toBase64 = new char[]{'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '/'};
     private static final char[] toBase64URL = new char[]{'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '_'};
+    private static final byte[] HEX_BYTES = new byte[]{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
     private static final double TOOLSKIT_WIDTH = 1920.0;
     private static final double TOOLSKIT_HEIGHT = 1080.0;
     private static double CURRENT_WIDTH = 1920.0;
@@ -364,18 +365,11 @@ public final class functions {
     }
 
     public static int random(int a, int b) {
-
         if (b >= 1 && a <= b) {
             if (a == b) {
                 return a;
             } else {
-                SplittableRandom random = (SplittableRandom)SplittableRandomLocal.get();
-                if (random == null) {
-                    random = new SplittableRandom();
-                    SplittableRandomLocal.set(random);
-                }
-
-                return random.nextInt(a, b + 1);
+                return java.util.concurrent.ThreadLocalRandom.current().nextInt(a, b + 1);
             }
         } else {
             return 0;
@@ -433,8 +427,8 @@ public final class functions {
 
         for(int i = 0; i < l; ++i) {
             byte b = bytes[i];
-            out[j++] = (byte)Character.forDigit(b >> 4 & 15, 16);
-            out[j++] = (byte)Character.forDigit(b & 15, 16);
+            out[j++] = HEX_BYTES[(b >> 4) & 15];
+            out[j++] = HEX_BYTES[b & 15];
         }
 
         return out;
@@ -733,20 +727,14 @@ public final class functions {
     }
 
     public static boolean filePutContent(File file, byte[] data) {
-        boolean state = false;
-
-        try {
-            FileOutputStream outputStream = new FileOutputStream(file);
+        try (FileOutputStream outputStream = new FileOutputStream(file)) {
             outputStream.write(data);
             outputStream.flush();
-            outputStream.close();
-            state = true;
+            return true;
         } catch (Exception var4) {
             Log.error(var4);
-            state = false;
+            return false;
         }
-
-        return state;
     }
 
     public static String getRandomString(int length) {

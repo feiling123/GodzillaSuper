@@ -1,5 +1,8 @@
 # Java
 *.class
+# Keep bundled ASM bytecode library shipped as a runtime asset (overrides *.class)
+!src/shells/plugins/java/assets/asm/
+!src/shells/plugins/java/assets/asm/**
 *.log
 *.tmp
 *.bak

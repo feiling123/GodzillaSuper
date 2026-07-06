@@ -17,10 +17,6 @@ public class PhpNone implements ShellProcessor {
     }
 
     public byte[] doProcessor(byte[] shell, String suffix) {
-        return new byte[0];
-    }
-
-    public byte[] doProcessor(byte[] shell, String suffix, String pass) {
         return shell;
     }
 }

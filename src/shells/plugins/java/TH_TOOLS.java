@@ -113,7 +113,7 @@ public class TH_TOOLS extends shells.plugins.generic.TH_TOOLS {
                 }
             } catch (Exception var4) {
                 Log.error(var4);
-                GOptionPane.showMessageDialog(this.corePanel, var4.getMessage(), "???", 2);
+                GOptionPane.showMessageDialog(this.corePanel, var4.getMessage(), "Error", 2);
             }
         }
 

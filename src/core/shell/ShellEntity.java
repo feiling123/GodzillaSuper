@@ -580,7 +580,7 @@ public class ShellEntity {
                     return false;
                 }
             } else {
-                updateSetingSql = "INSERT INTO shellEnv (\"shellId\",\"key\", \"value\") VALUES (?, ?, ?)";
+                updateSetingSql = "INSERT INTO shellEnv (shellId,key,value) VALUES (?, ?, ?)";
                 preparedStatement = Db.getPreparedStatement(updateSetingSql);
 
                 try {
@@ -771,7 +771,8 @@ public class ShellEntity {
             PreparedStatement preparedStatement = Db.getPreparedStatement(selectKeyNumSql);
             preparedStatement.setString(1, this.getId());
             preparedStatement.setString(2, key);
-            int c = preparedStatement.executeQuery().getInt("c");
+            java.sql.ResultSet rs = preparedStatement.executeQuery();
+            int c = rs.next() ? rs.getInt("c") : 0;
             preparedStatement.close();
             return c > 0;
         } catch (Exception var5) {

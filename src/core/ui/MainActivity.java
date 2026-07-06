@@ -32,6 +32,7 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
+import java.awt.FlowLayout;
 import java.awt.GraphicsEnvironment;
 import java.awt.Rectangle;
 import java.awt.KeyEventDispatcher;
@@ -42,26 +43,45 @@ import java.awt.Window;
 import java.awt.AWTEvent;
 import java.awt.event.AWTEventListener;
 import java.awt.datatransfer.ClipboardOwner;
+import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Date;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Vector;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 import javax.swing.BorderFactory;
+import javax.swing.Box;
 import javax.swing.JComponent;
-import javax.swing.tree.DefaultTreeCellRenderer;
+import javax.swing.JButton;
+import javax.swing.JTable;
+import javax.swing.table.DefaultTableCellRenderer;
+import javax.swing.table.DefaultTableModel;
+ import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.TreeCellRenderer;
 import javax.swing.JDialog;
 import javax.swing.JFrame;
@@ -73,6 +93,7 @@ import javax.swing.JMenuItem;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
+import javax.swing.JTextArea;
 import javax.swing.MenuElement;
 import javax.swing.MenuSelectionManager;
 import javax.swing.SwingUtilities;
@@ -90,6 +111,9 @@ public class MainActivity extends JFrame {
     private static final Pattern LOG_LINE_SUPER = Pattern.compile(
             "\\[[^]]+] Time:\\d{4}-\\d{2}-\\d{2} (\\d{2}:\\d{2}:\\d{2}) LastStackTrace:.* ThreadId:\\d+ Message: (.*)");
     private static final String SHELL_TABLE_COL_LOCATION = "\u5f52\u5c5e\u5730";
+    private static final String GSL_EXPORT_PROTO = "gsl5://import?data=";
+    private static final String FIELD_SEPARATOR = "";
+    private static final String RECORD_SEPARATOR = "";
     private static MainActivity mainActivityFrame;
     private static JMenuBar menuBar;
     private static JMenu menuBarAboutMenu;
@@ -121,6 +145,7 @@ public class MainActivity extends JFrame {
     private JMenuItem editShell;
     private JMenuItem refreshShell;
     private JPanel mainRootPanel;
+    private JLabel targetIndicatorLabel;
     private WallpaperLayerPanel wallpaperLayer;
     private JScrollPane shellGroupScrollPane;
 
@@ -133,7 +158,7 @@ public class MainActivity extends JFrame {
             MenuSelectionManager.defaultManager().clearSelectedPath();
         });
     }
-  
+
     private static void bindAutoHidePopup(JMenuItem menuItem) {
         if (menuItem != null) {
             menuItem.addActionListener((e) -> {
@@ -216,10 +241,17 @@ public class MainActivity extends JFrame {
         this.statusLabel.setForeground(ModernUi.STATUS_BAR_FG);
         this.statusAuroraPanel = new AuroraBarPanel(AuroraBarPanel.Variant.STATUS_DARK);
         this.statusAuroraPanel.add(this.statusLabel, BorderLayout.WEST);
+        this.targetIndicatorLabel = new JLabel("localdb");
+        this.targetIndicatorLabel.setForeground(Color.GRAY);
+        this.targetIndicatorLabel.setFont(this.targetIndicatorLabel.getFont().deriveFont(Font.BOLD));
+        this.targetIndicatorLabel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createEmptyBorder(0, 12, 0, 8),
+                BorderFactory.createEmptyBorder()));
+        this.updateTargetIndicator();
         Vector<Vector<String>> headerRow = Db.getAllShell();
-        this.columnVector = (Vector)headerRow.get(0).clone();
+        this.columnVector = (Vector) headerRow.get(0).clone();
         this.columnVector.add(SHELL_TABLE_COL_LOCATION);
-        this.shellView = new DataView((Vector)null, this.columnVector, -1, -1);
+        this.shellView = new DataView((Vector) null, this.columnVector, -1, -1);
         this.refreshShellView();
         this.shellView.setSelectionMode(2);
         this.shellView.setShowGrid(false);
@@ -260,10 +292,15 @@ public class MainActivity extends JFrame {
         addShellMenuItem.setActionCommand("addShell");
         JMenuItem addDatabaseShellMenuItem = new JMenuItem("\u6dfb\u52a0\u6570\u636e\u5e93Shell");
         addDatabaseShellMenuItem.setActionCommand("addDatabaseShell");
+        JMenuItem importLinkMenuItem = new JMenuItem("\u5bfc\u5165\u94fe\u63a5");
+        importLinkMenuItem.setActionCommand("importLink");
         this.targetMenu.add(addShellMenuItem);
         this.targetMenu.add(addDatabaseShellMenuItem);
+        this.targetMenu.addSeparator();
+        this.targetMenu.add(importLinkMenuItem);
         bindAutoHidePopup(addShellMenuItem);
         bindAutoHidePopup(addDatabaseShellMenuItem);
+        bindAutoHidePopup(importLinkMenuItem);
         this.attackMenu = new JMenu("\u653b\u51fb");
         JMenuItem shellLiveScanMenuItem = new JMenuItem("\u5b58\u6d3b\u626b\u63cf");
         shellLiveScanMenuItem.setActionCommand("shellLiveScan");
@@ -285,16 +322,19 @@ public class MainActivity extends JFrame {
         this.configMenu.add(pluginConfigMenuItem);
         JMenuItem operationAuditLogMenuItem = new JMenuItem("\u64cd\u4f5c\u5ba1\u8ba1\u65e5\u5fd7");
         operationAuditLogMenuItem.setActionCommand("showOperationAuditLog");
+        JMenuItem teamOpLogMenuItem = new JMenuItem("\u56e2\u961f\u64cd\u4f5c\u65e5\u5fd7");
+        teamOpLogMenuItem.setActionCommand("showTeamOpLog");
         this.configMenu.add(operationAuditLogMenuItem);
+        this.configMenu.add(teamOpLogMenuItem);
         bindAutoHidePopup(c2ProfileConfigMenuItem);
         bindAutoHidePopup(appConfigMenuItem);
         bindAutoHidePopup(pluginConfigMenuItem);
         bindAutoHidePopup(operationAuditLogMenuItem);
-        this.aboutMenu = new JMenu("\u5173\u4e8e");
-        JMenuItem aboutMenuItem = new JMenuItem("\u5173\u4e8e");
-        aboutMenuItem.setActionCommand("about");
-        this.aboutMenu.add(aboutMenuItem);
-        bindAutoHidePopup(aboutMenuItem);
+        this.aboutMenu = new JMenu("\u8d5e\u52a9");
+        JMenuItem sponsorMenuItem = new JMenuItem("\u8d5e\u52a9\u4f5c\u8005");
+        sponsorMenuItem.setActionCommand("about");
+        this.aboutMenu.add(sponsorMenuItem);
+        bindAutoHidePopup(sponsorMenuItem);
         this.shellGroupTree.setActionDbclick((e) -> {
             String nextGroup = this.shellGroupTree.GetSelectFile().trim();
             OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u5207\u6362\u5206\u7ec4", nextGroup);
@@ -307,9 +347,12 @@ public class MainActivity extends JFrame {
         menuBar.add(pluginMenu);
         menuBar.add(this.aboutMenu);
         menuBarAboutMenu = this.aboutMenu;
+        menuBar.add(Box.createHorizontalGlue());
+        menuBar.add(this.targetIndicatorLabel);
         flushPendingMenusForMenuBar();
         this.setJMenuBar(menuBar);
-        automaticBindClick.bindMenuItemClick(menuBar, (Map)null, this);
+        registerMcpMenuItem();
+        automaticBindClick.bindMenuItemClick(menuBar, (Map) null, this);
         this.copyselectItem = new JMenuItem("\u590d\u5236\u9009\u4e2d");
         this.copyselectItem.setActionCommand("copyShellViewSelected");
         this.interactMenuItem = new JMenuItem("\u4ea4\u4e92");
@@ -335,7 +378,7 @@ public class MainActivity extends JFrame {
         bindAutoHidePopup(this.editShell);
         bindAutoHidePopup(this.refreshShell);
         this.shellView.setRightClickMenu(shellViewPopupMenu);
-        automaticBindClick.bindMenuItemClick(shellViewPopupMenu, (Map)null, this);
+        automaticBindClick.bindMenuItemClick(shellViewPopupMenu, (Map) null, this);
         this.installGenerateDialogAutoCloseListener();
         shellViewPopupMenu.addPopupMenuListener(new PopupMenuListener() {
             public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
@@ -383,10 +426,49 @@ public class MainActivity extends JFrame {
                 SwingUtilities.invokeLater(() -> MainActivity.this.applySplitDividerProportions());
             }
         });
-        this.setLocationRelativeTo((Component)null);
+        this.setLocationRelativeTo((Component) null);
         this.applyUiEffectsFromSettings();
+        this.installGlobalKeyboardHandler();
         this.setVisible(true);
         this.setDefaultCloseOperation(3);
+    }
+
+    private void installGlobalKeyboardHandler() {
+        KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(new KeyEventDispatcher() {
+            public boolean dispatchKeyEvent(KeyEvent e) {
+                if (e.getID() != KeyEvent.KEY_PRESSED) {
+                    return false;
+                }
+                Window activeWindow = KeyboardFocusManager.getCurrentKeyboardFocusManager().getActiveWindow();
+                if (activeWindow != MainActivity.this && !isChildWindowOf(activeWindow, MainActivity.this)) {
+                    return false;
+                }
+                if (!e.isControlDown()) {
+                    return false;
+                }
+                if (e.getKeyCode() == KeyEvent.VK_C) {
+                    if (shellView.getSelectedRowCount() > 0) {
+                        SwingUtilities.invokeLater(() -> exportSelectedShells());
+                        return true;
+                    }
+                } else if (e.getKeyCode() == KeyEvent.VK_V) {
+                    SwingUtilities.invokeLater(() -> importShellsFromClipboard());
+                    return true;
+                }
+                return false;
+            }
+        });
+    }
+
+    private static boolean isChildWindowOf(Window child, Window parent) {
+        if (child == null || parent == null) return false;
+        if (child == parent) return true;
+        Window owner = child.getOwner();
+        while (owner != null) {
+            if (owner == parent) return true;
+            owner = owner.getOwner();
+        }
+        return false;
     }
 
     public void applyUiEffectsFromSettings() {
@@ -524,11 +606,11 @@ public class MainActivity extends JFrame {
         Toolkit.getDefaultToolkit().addAWTEventListener(new AWTEventListener() {
             public void eventDispatched(AWTEvent event) {
                 if (event instanceof WindowEvent) {
-                    WindowEvent we = (WindowEvent)event;
+                    WindowEvent we = (WindowEvent) event;
                     if (we.getID() == WindowEvent.WINDOW_OPENED) {
                         Window w = we.getWindow();
                         if (w instanceof JDialog) {
-                            JDialog d = (JDialog)w;
+                            JDialog d = (JDialog) w;
                             String title = d.getTitle();
                             if (title != null && title.toLowerCase().contains("generateshell")) {
                                 MainActivity.this.hookGenerateButtonInComponent(d.getContentPane(), d);
@@ -572,14 +654,14 @@ public class MainActivity extends JFrame {
     private void hookGenerateShellDialogAutoClose() {
         SwingUtilities.invokeLater(() -> {
             java.awt.Window[] windows = java.awt.Window.getWindows();
-            for(int i = 0; i < windows.length; ++i) {
+            for (int i = 0; i < windows.length; ++i) {
                 java.awt.Window w = windows[i];
                 if (w instanceof JDialog) {
-                    JDialog d = (JDialog)w;
+                    JDialog d = (JDialog) w;
                     String title = d.getTitle();
                     if (title != null && title.toLowerCase().contains("generateshell")) {
                         java.awt.Component[] comps = d.getContentPane().getComponents();
-                        for(int j = 0; j < comps.length; ++j) {
+                        for (int j = 0; j < comps.length; ++j) {
                             this.hookGenerateButtonInComponent(comps[j], d);
                         }
                     }
@@ -590,9 +672,9 @@ public class MainActivity extends JFrame {
 
     private void hookGenerateButtonInComponent(java.awt.Component c, JDialog dialog) {
         if (c instanceof javax.swing.JButton) {
-            javax.swing.JButton b = (javax.swing.JButton)c;
+            javax.swing.JButton b = (javax.swing.JButton) c;
             Object installed = b.getClientProperty("autoCloseInstalled");
-            if (installed instanceof Boolean && (Boolean)installed) {
+            if (installed instanceof Boolean && (Boolean) installed) {
                 return;
             }
 
@@ -606,30 +688,32 @@ public class MainActivity extends JFrame {
         }
 
         if (c instanceof java.awt.Container) {
-            java.awt.Component[] children = ((java.awt.Container)c).getComponents();
-            for(int i = 0; i < children.length; ++i) {
+            java.awt.Component[] children = ((java.awt.Container) c).getComponents();
+            for (int i = 0; i < children.length; ++i) {
                 this.hookGenerateButtonInComponent(children[i], dialog);
             }
         }
     }
 
 
-
     private void addShellMenuItemClick(ActionEvent e) {
         this.hideShellViewPopupMenu();
         OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u6dfb\u52a0 Shell", "\u5206\u7ec4: " + this.currentGroup);
-        new BasicShellSetting((String)null, this.currentGroup);
+        logOperation("", "\u65b0\u589eShell", "\u65b0\u589eShell");
+        new BasicShellSetting((String) null, this.currentGroup);
         this.refreshShellView();
     }
 
     private void addDatabaseShellMenuItemClick(ActionEvent e) {
+        logOperation("", "\u65b0\u589e\u6570\u636e\u5e93Shell", "\u65b0\u589e\u6570\u636e\u5e93Shell");
         this.hideShellViewPopupMenu();
         OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u6dfb\u52a0\u6570\u636e\u5e93 Shell", "\u5206\u7ec4: " + this.currentGroup);
-        new DatabaseShellSetting((String)null, this.currentGroup);
+        new DatabaseShellSetting((String) null, this.currentGroup);
         this.refreshShellView();
     }
 
     private void generateShellMenuItemClick(ActionEvent e) {
+        logOperation("", "\u751f\u6210Shell", "\u751f\u6210Shell\u8f7d\u8377");
         this.hideShellViewPopupMenu();
         OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u6253\u5f00\u751f\u6210 Shell", "");
         new GenerateShellLoder();
@@ -637,6 +721,7 @@ public class MainActivity extends JFrame {
     }
 
     private void shellLiveScanMenuItemClick(ActionEvent e) {
+        logOperation("", "\u75c5\u6bd2\u626b\u63cf", "\u75c5\u6bd2\u626b\u63cf");
         this.hideShellViewPopupMenu();
         OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u5b58\u6d3b\u626b\u63cf", "\u5206\u7ec4: " + this.currentGroup);
         new LiveScan(this.currentGroup);
@@ -665,21 +750,109 @@ public class MainActivity extends JFrame {
         OperationAuditLogDialog.showDialog(this);
     }
 
-    private void aboutMenuItemClick(ActionEvent e) {
+        private void showTeamOpLogMenuItemClick(ActionEvent e) {
         this.hideShellViewPopupMenu();
-        OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u5173\u4e8e", "");
-        GOptionPane.showMessageDialog(getFrame(), EasyI18N.getI18nString("\u00a9BeichenDream\u5f3a\u529b\u9a71\u52a8\nMail:beichendream@gmail.com\n"), "About", -1);
+        JFrame frame = new JFrame("Team Operation Log");
+        frame.setLayout(new BorderLayout());
+
+        JPanel topPanel = new JPanel(new BorderLayout());
+        topPanel.setBorder(BorderFactory.createEmptyBorder(8, 12, 4, 12));
+        JLabel titleLabel = new JLabel("Team Operation Audit Log");
+        titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD, 16f));
+        JLabel statsLabel = new JLabel("");
+        statsLabel.setForeground(Color.GRAY);
+        JButton refreshBtn = new JButton("Refresh");
+        JPanel topRight = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        topRight.add(statsLabel);
+        topRight.add(refreshBtn);
+        topPanel.add(titleLabel, BorderLayout.WEST);
+        topPanel.add(topRight, BorderLayout.EAST);
+
+        Vector<String> cols = new Vector<>();
+        cols.add("Time"); cols.add("Operator"); cols.add("Action"); cols.add("Shell"); cols.add("Detail");
+        Vector<Vector<String>> rows = new Vector<>();
+
+        Runnable loadData = () -> {
+            rows.clear();
+            try {
+                java.lang.reflect.Field f = Db.class.getDeclaredField("dbConn");
+                f.setAccessible(true);
+                java.sql.Connection c = (java.sql.Connection) f.get(null);
+                if (c != null) {
+                    java.sql.Statement s = c.createStatement();
+                    java.sql.ResultSet rs = s.executeQuery("SELECT username, shell_id, action, detail, create_time FROM operation_log ORDER BY create_time DESC");
+                    int addCount = 0, delCount = 0, execCount = 0, otherCount = 0;
+                    while (rs.next()) {
+                        Vector<String> row = new Vector<>();
+                        row.add(rs.getString(5));
+                        row.add(rs.getString(1));
+                        row.add(rs.getString(3));
+                        String sid = rs.getString(2);
+                        row.add(sid != null && sid.length() > 8 ? sid.substring(0, 8) : (sid != null ? sid : ""));
+                        row.add(rs.getString(4));
+                        rows.add(row);
+                        String action = rs.getString(3);
+                        if (action != null) {
+                            if (action.contains("\u65b0\u589e") || action.contains("\u65b0\u589e") || action.contains("\u65b0\u589e")) addCount++;
+                            else if (action.contains("\u5220\u9664") || action.contains("\u7f16\u8f91")) delCount++;
+                            else if (action.contains("\u6267\u884c")) execCount++;
+                            else otherCount++;
+                        }
+                    }
+                    s.close();
+                    int total = addCount + delCount + execCount + otherCount;
+                    statsLabel.setText("\u603b\u8ba1: " + total + " | \u65b0\u589e: " + addCount + " | \u5220\u9664: " + delCount + " | \u6267\u884c: " + execCount + " | \u5176\u4ed6: " + otherCount);
+                    if (total == 0) statsLabel.setText("\u65e0\u64cd\u4f5c\u65e5\u5fd7");
+                }
+            } catch (Exception ex) { statsLabel.setText("Error: " + ex.getMessage()); }
+        };
+        loadData.run();
+
+        DefaultTableModel model = new DefaultTableModel(rows, cols);
+        JTable table = new JTable(model);
+        table.setFillsViewportHeight(true);
+        table.setAutoCreateRowSorter(true);
+        table.getColumnModel().getColumn(2).setCellRenderer(new DefaultTableCellRenderer() {
+            public Component getTableCellRendererComponent(JTable t, Object v, boolean sel, boolean foc, int r, int c) {
+                Component comp = super.getTableCellRendererComponent(t, v, sel, foc, r, c);
+                if (v == null) return comp;
+                String val = v.toString();
+                if (!sel) {
+                    if (val.contains("\u65b0\u589e") || val.contains("\u65b0\u589e") || val.contains("\u65b0\u589e")) comp.setBackground(new Color(230, 255, 230));
+                    else if (val.contains("\u5220\u9664") || val.contains("\u7f16\u8f91")) comp.setBackground(new Color(255, 230, 230));
+                    else if (val.contains("\u6267\u884c")) comp.setBackground(new Color(230, 240, 255));
+                    else if (val.contains("\u4ea4\u4e92") || val.contains("\u5176\u4ed6")) comp.setBackground(new Color(255, 250, 230));
+                    else comp.setBackground(Color.WHITE);
+                }
+                return comp;
+            }
+        });
+
+        JScrollPane sp = new JScrollPane(table);
+        frame.add(topPanel, BorderLayout.NORTH);
+        frame.add(sp, BorderLayout.CENTER);
+
+        refreshBtn.addActionListener(ev -> { loadData.run(); model.setRowCount(0); for (Vector<String> rw : rows) model.addRow(rw); });
+
+        frame.setSize(960, 550);
+        frame.setLocationRelativeTo(this);
+        frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+        frame.setVisible(true);
     }
 
-    private void copyShellViewSelectedMenuItemClick(ActionEvent e) {
+
+        private void aboutMenuItemClick(ActionEvent e) {
+        this.hideShellViewPopupMenu();
+        GOptionPane.showMessageDialog(getFrame(), "\u611f\u8c22\u60a8\u7684\u652f\u6301\uff01", "\u8d5e\u52a9", 1);
+    }private void copyShellViewSelectedMenuItemClick(ActionEvent e) {
         this.hideShellViewPopupMenu();
         int columnIndex = this.shellView.getSelectedColumn();
         if (columnIndex != -1) {
             Object o = this.shellView.getValueAt(this.shellView.getSelectedRow(), this.shellView.getSelectedColumn());
             if (o != null) {
-                String value = (String)o;
+                String value = (String) o;
                 OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u590d\u5236\u8868\u683c\u5355\u5143\u683c", "");
-                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(value), (ClipboardOwner)null);
+                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(value), (ClipboardOwner) null);
                 GOptionPane.showMessageDialog(getMainActivityFrame(), "\u590d\u5236\u6210\u529f", "\u63d0\u793a", 1);
             } else {
                 GOptionPane.showMessageDialog(getMainActivityFrame(), "\u9009\u4e2d\u5185\u5bb9\u4e3a\u7a7a", "\u63d0\u793a", 2);
@@ -694,12 +867,13 @@ public class MainActivity extends JFrame {
         this.hideShellViewPopupMenu();
         String[] shellIds = this.getSlectedShellId();
         if (shellIds.length > 0) {
-            int n = GOptionPane.showConfirmDialog(getMainActivityFrame(), String.format(EasyI18N.getI18nString("\u786e\u8ba4\u5220\u9664id\u4e3a %s \u7684shell\u5417?"), Arrays.toString((Object[])shellIds)), "\u786e\u8ba4", 0);
+            int n = GOptionPane.showConfirmDialog(getMainActivityFrame(), String.format(EasyI18N.getI18nString("\u786e\u8ba4\u5220\u9664id\u4e3a %s \u7684shell\u5417?"), Arrays.toString((Object[]) shellIds)), "\u786e\u8ba4", 0);
             if (n == 0) {
                 OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u5220\u9664 Shell", Arrays.toString(shellIds));
-                for(int i = 0; i < shellIds.length; ++i) {
+                for (int i = 0; i < shellIds.length; ++i) {
                     String shellId = shellIds[i];
                     String shshellInfo = Db.getOneShell(shellId).toString();
+                    logOperation(shellId, "\u5220\u9664Shell", "\u5220\u9664:" + Db.getOneShell(shellId).getUrl());
                     Log.log("removeShell status:%s  -> %s", new Object[]{Db.removeShell(shellId) > 0, shshellInfo});
                 }
 
@@ -716,11 +890,211 @@ public class MainActivity extends JFrame {
         int[] rows = this.shellView.getSelectedRows();
         String[] shellIds = new String[rows.length];
 
-        for(int i = 0; i < shellIds.length; ++i) {
-            shellIds[i] = (String)this.shellView.getValueAt(rows[i], 0);
+        for (int i = 0; i < shellIds.length; ++i) {
+            shellIds[i] = (String) this.shellView.getValueAt(rows[i], 0);
         }
 
         return shellIds;
+    }
+
+    private String serializeShellEntity(ShellEntity shell) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(encodeField(shell.getUrl())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getPassword())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getSecretKey())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getPayload())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getCryption())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getEncoding())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getHeaderS())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getReqLeft())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getReqRight())).append(FIELD_SEPARATOR);
+        sb.append(shell.getConnTimeout()).append(FIELD_SEPARATOR);
+        sb.append(shell.getReadTimeout()).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getProxyType())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getProxyHost())).append(FIELD_SEPARATOR);
+        sb.append(shell.getProxyPort()).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getRemark())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getC2ProfileName() != null ? shell.getC2ProfileName() : "")).append(FIELD_SEPARATOR);
+        sb.append(shell.getMaxErrRetry()).append(FIELD_SEPARATOR);
+        sb.append(shell.getOnceBigFileDownloadByteNum()).append(FIELD_SEPARATOR);
+        sb.append(shell.getOnceBigFileUploadByteNum()).append(FIELD_SEPARATOR);
+        sb.append(shell.getBigFileDownloadThreadNum()).append(FIELD_SEPARATOR);
+        sb.append(shell.isMergeResponseCookie()).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getClientCertPath())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getClientCertPassword())).append(FIELD_SEPARATOR);
+        sb.append(encodeField(shell.getGroup()));
+        return sb.toString();
+    }
+
+    private static String encodeField(String value) {
+        if (value == null) return "";
+        try {
+            return URLEncoder.encode(value, "UTF-8");
+        } catch (Exception e) {
+            return value;
+        }
+    }
+
+    private static String decodeField(String value) {
+        if (value == null || value.isEmpty()) return "";
+        try {
+            return URLDecoder.decode(value, "UTF-8");
+        } catch (Exception e) {
+            return value;
+        }
+    }
+
+    private void exportSelectedShells() {
+        String[] shellIds = this.getSlectedShellId();
+        if (shellIds.length == 0) {
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < shellIds.length; ++i) {
+            ShellEntity shell = Db.getOneShell(shellIds[i]);
+            if (shell != null) {
+                sb.append(serializeShellEntity(shell));
+                if (i < shellIds.length - 1) {
+                    sb.append(RECORD_SEPARATOR);
+                }
+            }
+        }
+        if (sb.length() == 0) {
+            GOptionPane.showMessageDialog(getMainActivityFrame(), "\u65e0\u53ef\u5bfc\u51fa\u7684Shell\u6570\u636e", "\u63d0\u793a", 2);
+            return;
+        }
+        try {
+            byte[] rawBytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            GZIPOutputStream gzos = new GZIPOutputStream(bos);
+            gzos.write(rawBytes);
+            gzos.close();
+            String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(bos.toByteArray());
+            String link = GSL_EXPORT_PROTO + encoded;
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(
+                    new StringSelection(link), (ClipboardOwner) null);
+            OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u5bfc\u51faShell\u94fe\u63a5", "\u5df2\u5bfc\u51fa " + shellIds.length + " \u6761Shell");
+            GOptionPane.showMessageDialog(getMainActivityFrame(),
+                    "\u5df2\u5bfc\u51fa " + shellIds.length + " \u6761Shell\u5230\u526a\u8d34\u677f\n\u94fe\u63a5\u5df2\u590d\u5236\uff0c\u53ef\u53d1\u9001\u7ed9\u4ed6\u4eba\u901a\u8fc7Ctrl+V\u5bfc\u5165", "\u63d0\u793a", 1);
+        } catch (Exception e) {
+            Log.error(e);
+            GOptionPane.showMessageDialog(getMainActivityFrame(), "\u5bfc\u51fa\u5931\u8d25: " + e.getMessage(), "\u9519\u8bef", 2);
+        }
+    }
+
+    private void importShellsFromClipboard() {
+        try {
+            Transferable trans = Toolkit.getDefaultToolkit().getSystemClipboard().getContents(null);
+            if (trans == null || !trans.isDataFlavorSupported(DataFlavor.stringFlavor)) {
+                return;
+            }
+            String clipboardText = (String) trans.getTransferData(DataFlavor.stringFlavor);
+            if (clipboardText == null || !clipboardText.startsWith(GSL_EXPORT_PROTO)) {
+                return;
+            }
+            int q = GOptionPane.showConfirmDialog(getMainActivityFrame(),
+                    "\u68c0\u6d4b\u5230\u526a\u8d34\u677f\u4e2d\u7684Shell\u5bfc\u5165\u94fe\u63a5\uff0c\u662f\u5426\u7acb\u5373\u5bfc\u5165\uff1f", "\u5bfc\u5165Shell", 0);
+            if (q != 0) {
+                return;
+            }
+            String encoded = clipboardText.substring(GSL_EXPORT_PROTO.length()).trim();
+            if (encoded.isEmpty()) {
+                GOptionPane.showMessageDialog(getMainActivityFrame(), "\u5bfc\u5165\u94fe\u63a5\u6570\u636e\u4e3a\u7a7a", "\u63d0\u793a", 2);
+                return;
+            }
+            byte[] compressed = Base64.getUrlDecoder().decode(encoded);
+            ByteArrayInputStream bis = new ByteArrayInputStream(compressed);
+            GZIPInputStream gzis = new GZIPInputStream(bis);
+            byte[] rawBytes = util.functions.readInputStream(gzis);
+            gzis.close();
+            String data = new String(rawBytes, StandardCharsets.UTF_8);
+            String[] records = data.split(RECORD_SEPARATOR, -1);
+            java.util.ArrayList<String> importUrls = new java.util.ArrayList<>(); int addedCount = 0;
+            int skipCount = 0;
+            for (String record : records) {
+                if (record == null || record.trim().isEmpty()) {
+                    continue;
+                }
+                String[] fields = record.split(FIELD_SEPARATOR, -1);
+                if (fields.length < 24) {
+                    skipCount++;
+                    continue;
+                }
+                String shellId = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+                ShellEntity shell = new ShellEntity();
+                shell.setId(shellId);
+                shell.setUrl(decodeField(fields[0]));
+                shell.setPassword(decodeField(fields[1]));
+                shell.setSecretKey(decodeField(fields[2]));
+                shell.setPayload(decodeField(fields[3]));
+                shell.setCryption(decodeField(fields[4]));
+                shell.setEncoding(decodeField(fields[5]));
+                shell.setHeader(decodeField(fields[6]));
+                shell.setReqLeft(decodeField(fields[7]));
+                shell.setReqRight(decodeField(fields[8]));
+                try {
+                    shell.setConnTimeout(Integer.parseInt(fields[9]));
+                } catch (Exception e) {
+                }
+                try {
+                    shell.setReadTimeout(Integer.parseInt(fields[10]));
+                } catch (Exception e) {
+                }
+                shell.setProxyType(decodeField(fields[11]));
+                shell.setProxyHost(decodeField(fields[12]));
+                try {
+                    shell.setProxyPort(Integer.parseInt(fields[13]));
+                } catch (Exception e) {
+                }
+                shell.setRemark(decodeField(fields[14]));
+                shell.setC2ProfileName(decodeField(fields[15]));
+                if (Db.addShell(shell) > 0) {
+                    // After addShell, persist env-based settings
+                    try {
+                        shell.setMaxErrRetry(Integer.parseInt(fields[16]));
+                    } catch (Exception e) {
+                    }
+                    try {
+                        shell.setOnceBigFileDownloadByteNum(Integer.parseInt(fields[17]));
+                    } catch (Exception e) {
+                    }
+                    try {
+                        shell.setOnceBigFileUploadByteNum(Integer.parseInt(fields[18]));
+                    } catch (Exception e) {
+                    }
+                    try {
+                        shell.setBigFileDownloadThreadNum(Integer.parseInt(fields[19]));
+                    } catch (Exception e) {
+                    }
+                    try {
+                        shell.setMergeResponseCookie(Boolean.parseBoolean(fields[20]));
+                    } catch (Exception e) {
+                    }
+                    shell.setClientCertPath(decodeField(fields[21]));
+                    shell.setClientCertPassword(decodeField(fields[22]));
+                    if (fields.length > 23) {
+                        String group = decodeField(fields[23]);
+                        if (group != null && !group.isEmpty()) {
+                            shell.setGroup(group);
+                        }
+                    }
+                    String c2Profile = shell.getC2ProfileName();
+                    if (c2Profile != null && !c2Profile.isEmpty()) {
+                        shell.setC2ProfileName2(c2Profile);
+                    }
+                    importUrls.add(decodeField(fields[0])); addedCount++;
+                } else {
+                    skipCount++;
+                }
+            }
+            OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u5bfc\u5165Shell", "\u6210\u529f: " + addedCount + " \u8df3\u8fc7: " + skipCount);
+            logOperation("", "\u65b0\u589eShell", "\u65b0\u589e " + addedCount + " \u6761Shell" + (importUrls.isEmpty() ? "" : " | " + String.join(", ", importUrls.subList(0, Math.min(importUrls.size(), 10))) + (importUrls.size() > 10 ? " ..." : "")));;
+            GOptionPane.showMessageDialog(getMainActivityFrame(),
+                    "\u5bfc\u5165\u5b8c\u6210! \u6210\u529f: " + addedCount + " \u6761, \u8df3\u8fc7: " + skipCount + " \u6761", "\u63d0\u793a", 1);
+            this.refreshShellView();
+        } catch (Exception e) {
+            // Silently ignore non-GSL5 clipboard content
+        }
     }
 
     private void editShellMenuItemClick(ActionEvent e) {
@@ -728,9 +1102,10 @@ public class MainActivity extends JFrame {
         String[] shellIds = this.getSlectedShellId();
         if (shellIds.length > 0) {
             OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u7f16\u8f91 Shell", Arrays.toString(shellIds));
-            for(int i = 0; i < shellIds.length; ++i) {
+            for (int i = 0; i < shellIds.length; ++i) {
                 String shellId = shellIds[i];
                 String shellUrl = Db.getOneShell(shellId).getUrl();
+                logOperation(shellId, "\u7f16\u8f91Shell", "\u7f16\u8f91:" + shellUrl);
                 if (shellUrl != null && shellUrl.startsWith("jdbc:")) {
                     new DatabaseShellSetting(shellId, this.currentGroup);
                 } else {
@@ -749,8 +1124,9 @@ public class MainActivity extends JFrame {
         }
 
         try {
-            String shellId = (String)this.shellView.getValueAt(this.shellView.getSelectedRow(), 0);
+            String shellId = (String) this.shellView.getValueAt(this.shellView.getSelectedRow(), 0);
             OperationAuditLog.ui("\u4e3b\u754c\u9762", "\u6253\u5f00 Shell \u4ea4\u4e92", shellId);
+            logOperation(shellId, "\u7f13\u5b58\u8fdb\u5165\u4ea4\u4e92", "\u4ea4\u4e92:" + Db.getOneShell(shellId).getUrl());
             ShellManage sm = new ShellManage(Db.getOneShell(shellId));
             ShellLinkedWindowChrome.attach(sm);
         } catch (Throwable var4) {
@@ -766,7 +1142,7 @@ public class MainActivity extends JFrame {
             return;
         }
 
-        String shellId = (String)this.shellView.getValueAt(this.shellView.getSelectedRow(), 0);
+        String shellId = (String) this.shellView.getValueAt(this.shellView.getSelectedRow(), 0);
 
         try {
             if ((new File(String.format("%s/%s/cache.db", "GodzillaCache", shellId))).isFile()) {
@@ -779,7 +1155,7 @@ public class MainActivity extends JFrame {
                 GOptionPane.showMessageDialog(getMainActivityFrame(), "\u7f13\u5b58\u6587\u4ef6\u4e0d\u5b58\u5728");
             }
         } catch (Throwable var5) {
-            GOptionPane.showThrowableMessageDialog((Component)null, "\u8fdb\u5165\u7f13\u5b58Shell\u65f6\u53d1\u751f\u5f02\u5e38", var5);
+            GOptionPane.showThrowableMessageDialog((Component) null, "\u8fdb\u5165\u7f13\u5b58Shell\u65f6\u53d1\u751f\u5f02\u5e38", var5);
         }
 
     }
@@ -794,6 +1170,35 @@ public class MainActivity extends JFrame {
         this.statusLabel.setText(String.format(
                 "Shell \u603b\u6570: %d | \u5f53\u524d\u8fc7\u6ee4: %s | \u8868\u683c\u884c\u6570: %d | \u672c\u5730\u5e93: %s",
                 totalShells, filterLabel, tableRows, dbPath));
+    }
+
+    private void updateTargetIndicator() {
+        if (!isRemoteDb || remoteDbUrl == null || remoteDbUrl.isEmpty()) {
+            this.targetIndicatorLabel.setText("localdb");
+            this.targetIndicatorLabel.setForeground(Color.GRAY);
+            return;
+        }
+        try {
+            String hostPort = remoteDbUrl;
+            // parse jdbc:postgresql://host:port/dbname
+            int start = remoteDbUrl.indexOf("://");
+            if (start > 0) {
+                String rest = remoteDbUrl.substring(start + 3);
+                int slash = rest.indexOf('/');
+                if (slash > 0) rest = rest.substring(0, slash);
+                hostPort = rest;
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append(hostPort).append(" \u56e2\u961f\u6a21\u5f0f");
+            if (operatorName != null && !operatorName.isEmpty()) {
+                sb.append(" | \u64cd\u4f5c\u5458: ").append(operatorName);
+            }
+            this.targetIndicatorLabel.setText(sb.toString());
+            this.targetIndicatorLabel.setForeground(Color.RED);
+        } catch (Exception ex) {
+            this.targetIndicatorLabel.setText("localdb");
+            this.targetIndicatorLabel.setForeground(Color.GRAY);
+        }
     }
 
     private void enrichShellRowsWithIpLocation(Vector<Vector<String>> dataRows) {
@@ -842,6 +1247,29 @@ public class MainActivity extends JFrame {
         return pluginMenu.add(menuItem);
     }
 
+    private void registerMcpMenuItem() {
+        try {
+            JMenuItem mcpItem = new JMenuItem("MCP \u670d\u52a1");
+            mcpItem.addActionListener(e -> {
+                try {
+                    Class<?> mcpClass = Class.forName("shells.plugins.generic.McpService");
+                    Object mcp = mcpClass.newInstance();
+                    java.awt.Container view = (java.awt.Container) mcpClass.getMethod("getView").invoke(mcp);
+                    JFrame frame = new JFrame("MCP \u670d\u52a1\u63a7\u5236\u9762\u677f");
+                    frame.setContentPane(view);
+                    frame.setSize(500, 400);
+                    frame.setLocationRelativeTo(MainActivity.this);
+                    frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
+                    frame.setVisible(true);
+                } catch (Exception ex) {
+                    Log.error(ex);
+                }
+            });
+            pluginMenu.add(mcpItem);
+        } catch (Exception ignored) {
+        }
+    }
+
     public static void registerPluginPopMenu(PopupMenu popupMenu) {
         pluginMenu.add(popupMenu);
     }
@@ -864,7 +1292,7 @@ public class MainActivity extends JFrame {
             MenuElement[] var2 = menuElements;
             int var3 = menuElements.length;
 
-            for(int var4 = 0; var4 < var3; ++var4) {
+            for (int var4 = 0; var4 < var3; ++var4) {
                 MenuElement menuElement = var2[var4];
                 setSubMenuFont(menuElement, font);
             }
@@ -877,10 +1305,10 @@ public class MainActivity extends JFrame {
         MenuElement[] var3 = menuElements;
         int var4 = menuElements.length;
 
-        for(int var5 = 0; var5 < var4; ++var5) {
+        for (int var5 = 0; var5 < var4; ++var5) {
             MenuElement element = var3[var5];
             if (element instanceof JComponent) {
-                ((JComponent)element).setFont(font);
+                ((JComponent) element).setFont(font);
             }
 
             setSubMenuFont(element, font);
@@ -919,15 +1347,159 @@ public class MainActivity extends JFrame {
     }
 
     public static void main(String[] args) {
+        if (args.length >= 1 && "mcp".equals(args[0])) {
+            int p = 9123;
+            if (args.length >= 2) {
+                try {
+                    p = Integer.parseInt(args[1]);
+                } catch (Exception ignored) {
+                }
+            }
+            try {
+                Class.forName("core.ApplicationConfig", true, Thread.currentThread().getContextClassLoader());
+                Class.forName("core.ApplicationContext", true, Thread.currentThread().getContextClassLoader());
+            } catch (Exception e) {
+                Log.error(e);
+                System.exit(1);
+            }
+            try {
+                Class<?> cls = Class.forName("shells.plugins.generic.McpService");
+                java.lang.reflect.Method m = cls.getMethod("startHeadless", Integer.TYPE);
+                m.invoke(null, p);
+            } catch (Exception e) {
+                Log.error(e);
+                System.exit(1);
+            }
+            return;
+        }
         try {
             initUi();
+            StartupModeDialog.DbConfig cfg = StartupModeDialog.showDialog();
+            if (cfg == null) { System.exit(0); return; }
+            operatorName = cfg.operatorName;
+            if (cfg.isRemote()) {
+                remoteDbUrl = cfg.dbPath;
+                isRemoteDb = true;
+            }
             initStatic();
             Class.forName("core.ApplicationContext", true, Thread.currentThread().getContextClassLoader());
-        } catch (Exception var2) {
-            Log.error(var2);
-        }
+            if (cfg.isRemote()) {
+                swiitchDb(cfg);
+                ensureAllTables();
+                ensureDefaultData();
+            }
+        } catch (Exception e) { Log.error(e); }
         GodzillaObjectInputFilter.installObjectInputFilter();
         MainActivity activity = new MainActivity();
         mainActivityFrame = activity.getJFrame();
+    }
+
+
+    private static void ensureDefaultData() {
+        try {
+            java.lang.reflect.Field f = Db.class.getDeclaredField("dbConn");
+            f.setAccessible(true);
+            java.sql.Connection c = (java.sql.Connection) f.get(null);
+            if (c == null) return;
+            // Check if shell table is empty (fresh database)
+            java.sql.Statement s = c.createStatement();
+            java.sql.ResultSet rs = s.executeQuery("SELECT COUNT(*) FROM shell");
+            rs.next();
+            int count = rs.getInt(1);
+            rs.close(); s.close();
+            if (count > 0) return;
+            // Insert default demo shell
+            String id = java.util.UUID.randomUUID().toString();
+            String now = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new java.util.Date());
+            java.sql.PreparedStatement ps = c.prepareStatement(
+                "INSERT INTO shell(id,url,password,secretKey,payload,cryption,encoding,headers,reqLeft,reqRight,connTimeout,readTimeout,proxyType,proxyHost,proxyPort,remark,note,createTime,updateTime) " +
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+            ps.setString(1, id);
+            ps.setString(2, "http://127.0.0.1:8080/1.jsp");
+            ps.setString(3, "pass");
+            ps.setString(4, "key");
+            ps.setString(5, "JavaDynamicPayload");
+            ps.setString(6, "JavaAesBase64");
+            ps.setString(7, "UTF-8");
+            ps.setString(8, "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:84.0) Gecko/20100101 Firefox/84.0\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\nAccept-Language: zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2");
+            ps.setString(9, "");
+            ps.setString(10, "");
+            ps.setInt(11, 60000);
+            ps.setInt(12, 60000);
+            ps.setString(13, "NO_PROXY");
+            ps.setString(14, "");
+            ps.setString(15, "");
+            ps.setString(16, "Demo Shell");
+            ps.setString(17, "");
+            ps.setString(18, now);
+            ps.setString(19, now);
+            ps.executeUpdate(); ps.close();
+            Log.log("Default demo shell created: http://127.0.0.1:8080/1.jsp");
+        } catch (Exception ignored) {}
+    }
+    static String operatorName;
+    public static boolean isRemoteDb = false;
+    static String remoteDbUrl = "";
+
+    private static void swiitchDb(StartupModeDialog.DbConfig cfg) {
+        try {
+            java.lang.reflect.Field f = Db.class.getDeclaredField("dbConn");
+            f.setAccessible(true);
+            java.sql.Connection old = (java.sql.Connection) f.get(null);
+            java.sql.Connection c;
+            if (cfg.isPg) {
+                Class.forName("org.postgresql.Driver");
+                c = java.sql.DriverManager.getConnection(cfg.dbPath, cfg.username, cfg.password);
+            } else {
+                c = java.sql.DriverManager.getConnection("jdbc:sqlite:" + cfg.dbPath);
+                try (java.sql.Statement s = c.createStatement()) { s.execute("PRAGMA journal_mode=WAL"); } catch (Exception ignored) {}
+            }
+            isRemoteDb = true;
+            f.set(null, c);
+            if (old != null && !old.isClosed()) { try { old.close(); } catch (Exception ex) {} }
+            Log.log("Switched Db to: " + cfg.dbPath);
+        } catch (Exception e) {
+            Log.error(e);
+            javax.swing.JOptionPane.showMessageDialog(null, "DB connect failed: " + e.getMessage());
+        }
+    }
+
+    private static void ensureAllTables() {
+        try {
+            java.lang.reflect.Field f = Db.class.getDeclaredField("dbConn");
+            f.setAccessible(true);
+            java.sql.Connection c = (java.sql.Connection) f.get(null);
+            if (c == null) return;
+            try (java.sql.Statement s = c.createStatement()) {
+                String idType = "TEXT";
+                String intType = "INTEGER";
+                String autoIncr = isRemoteDb ? "GENERATED BY DEFAULT AS IDENTITY" : "AUTOINCREMENT";
+                s.execute("CREATE TABLE IF NOT EXISTS shell (id " + idType + " PRIMARY KEY, url TEXT NOT NULL, password TEXT NOT NULL, secretKey TEXT NOT NULL, payload TEXT NOT NULL, cryption TEXT NOT NULL, encoding TEXT NOT NULL, headers TEXT, reqLeft TEXT, reqRight TEXT, connTimeout " + intType + " DEFAULT 60000, readTimeout " + intType + " DEFAULT 60000, proxyType TEXT, proxyHost TEXT, proxyPort TEXT, remark TEXT, note TEXT, createTime TEXT, updateTime TEXT)");
+                s.execute("CREATE TABLE IF NOT EXISTS shellEnv (shellId VARCHAR(64) NOT NULL, key VARCHAR(256) NOT NULL, value TEXT, PRIMARY KEY (shellId, key))");
+                s.execute("CREATE TABLE IF NOT EXISTS seting (key VARCHAR(256) PRIMARY KEY, value TEXT)");
+                s.execute("CREATE TABLE IF NOT EXISTS plugin (pluginJarFile VARCHAR(512) PRIMARY KEY)");
+                s.execute("CREATE TABLE IF NOT EXISTS shellGroup (groupId VARCHAR(256) PRIMARY KEY)");
+                s.execute("CREATE TABLE IF NOT EXISTS operation_log (id " + intType + " " + autoIncr + " PRIMARY KEY, username VARCHAR(128) NOT NULL, shell_id VARCHAR(64), action VARCHAR(128) NOT NULL, detail TEXT, create_time TEXT NOT NULL)");
+            }
+        } catch (Exception ignored) {}
+    }
+
+    public static void logOperation(String shellId, String action, String detail) {
+        if (!isRemoteDb || operatorName == null) return;
+        try {
+            java.lang.reflect.Field f = Db.class.getDeclaredField("dbConn");
+            f.setAccessible(true);
+            java.sql.Connection c = (java.sql.Connection) f.get(null);
+            if (c == null) return;
+            String timeFn = isRemoteDb ? "NOW()" : "datetime('now')";
+            String sql = "INSERT INTO operation_log(username,shell_id,action,detail,create_time) VALUES(?,?,?,?," + timeFn + ")";
+            java.sql.PreparedStatement ps = c.prepareStatement(sql);
+            ps.setString(1, operatorName);
+            ps.setString(2, shellId != null ? shellId : "");
+            ps.setString(3, action);
+            ps.setString(4, detail != null ? detail : "");
+            ps.executeUpdate();
+            ps.close();
+        } catch (Exception ignored) {}
     }
 }

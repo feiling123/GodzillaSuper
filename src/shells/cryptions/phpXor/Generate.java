@@ -16,7 +16,7 @@ import util.TemplateEx;
 import util.functions;
 
 public class Generate {
-    private static final String CHARS = "QWERTYUIOPASDFGHJKLZXCVBNMqwertyuiopasdfghjklzxcvbnm1234567890~!@#$%^&*()_+-={}[];':\",.<>?\\|~!@#$%^&*()_+-={}[];':\",.<>?\\|~!@#$%^&*()_+-={}[];':\",.<>?\\|";
+    private static final String SAFE_CHARS = "QWERTYUIOPASDFGHJKLZXCVBNMqwertyuiopasdfghjklzxcvbnm1234567890~!@#$%^&()_+-={}[];':\",.<>?\\|~!@#$%^&()_+-={}[];':\",.<>?\\|~!@#$%^&()_+-={}[];':\",.<>?\\|";
     private static final String UPPER_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     private static final SecureRandom RANDOM = new SecureRandom();
 
@@ -30,15 +30,15 @@ public class Generate {
         int index;
         if (isUpper) {
             for(i = 0; i < length; ++i) {
-                index = RANDOM.nextInt("ABCDEFGHIJKLMNOPQRSTUVWXYZ".length());
-                sb.append("ABCDEFGHIJKLMNOPQRSTUVWXYZ".charAt(index));
+                index = RANDOM.nextInt(UPPER_CHARS.length());
+                sb.append(UPPER_CHARS.charAt(index));
             }
 
             return sb.toString();
         } else {
             for(i = 0; i < length; ++i) {
-                index = RANDOM.nextInt("QWERTYUIOPASDFGHJKLZXCVBNMqwertyuiopasdfghjklzxcvbnm1234567890~!@#$%^&*()_+-={}[];':\",.<>?\\|~!@#$%^&*()_+-={}[];':\",.<>?\\|~!@#$%^&*()_+-={}[];':\",.<>?\\|".length());
-                sb.append("QWERTYUIOPASDFGHJKLZXCVBNMqwertyuiopasdfghjklzxcvbnm1234567890~!@#$%^&*()_+-={}[];':\",.<>?\\|~!@#$%^&*()_+-={}[];':\",.<>?\\|~!@#$%^&*()_+-={}[];':\",.<>?\\|".charAt(index));
+                index = RANDOM.nextInt(SAFE_CHARS.length());
+                sb.append(SAFE_CHARS.charAt(index));
             }
 
             return "/*" + sb.toString() + "*/";
@@ -92,7 +92,6 @@ public class Generate {
         } catch (Exception var6) {
             Log.error(var6);
         }
-
         return data;
     }
 }

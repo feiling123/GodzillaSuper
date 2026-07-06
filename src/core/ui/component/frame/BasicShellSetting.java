@@ -138,12 +138,12 @@ public class BasicShellSetting extends JFrame {
                 if (group != null) {
                     BasicShellSetting.this.groupIdTextField.setText(group);
                 } else {
-                    Log.log("取消选择......");
+                    Log.log("\u53d6\u6d88\u9009\u62e9......");
                 }
 
             }
         });
-        this.setButton.setText(this.shellId != null && this.shellId.trim().length() > 0 ? "修改" : "添加");
+        this.setButton.setText(this.shellId != null && this.shellId.trim().length() > 0 ? "\u4fee\u6539" : "\u6dfb\u52a0");
         functions.fireActionEventByJComboBox(this.payloadComboBox);
         this.initShellContent();
         this.add(this.corePanel);
@@ -164,7 +164,7 @@ public class BasicShellSetting extends JFrame {
         this.corePanel.add(this.tabbedPane1, new GridConstraints(0, 0, 1, 1, 0, 3, 3, 3, (Dimension)null, new Dimension(200, 200), (Dimension)null, 0, false));
         JPanel panel1 = new JPanel();
         panel1.setLayout(new GridLayoutManager(1, 1, new Insets(0, 0, 0, 0), -1, -1));
-        this.tabbedPane1.addTab("基础配置", panel1);
+        this.tabbedPane1.addTab("\u57fa\u7840\u914d\u7f6e", panel1);
         JPanel panel2 = new JPanel();
         panel2.setLayout(new GridLayoutManager(16, 2, new Insets(0, 80, 0, 80), -1, -1));
         panel1.add(panel2, new GridConstraints(0, 0, 1, 1, 0, 1, 3, 3, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
@@ -176,47 +176,47 @@ public class BasicShellSetting extends JFrame {
         this.urlTextField.setText("http://127.0.0.1/shell.jsp");
         panel2.add(this.urlTextField, new GridConstraints(0, 1, 1, 1, 8, 1, 4, 3, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         this.passwordLabel = new JLabel();
-        this.passwordLabel.setText("密码");
+        this.passwordLabel.setText("\u5bc6\u7801");
         panel2.add(this.passwordLabel, new GridConstraints(1, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.passwordTextField = new JTextField();
         this.passwordTextField.setText("pass");
         panel2.add(this.passwordTextField, new GridConstraints(1, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         this.secretKeyLabel = new JLabel();
-        this.secretKeyLabel.setText("密钥");
+        this.secretKeyLabel.setText("\u5bc6\u94a5");
         panel2.add(this.secretKeyLabel, new GridConstraints(2, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.secretKeyTextField = new JTextField();
         this.secretKeyTextField.setColumns(100);
         this.secretKeyTextField.setText("key");
         panel2.add(this.secretKeyTextField, new GridConstraints(2, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         this.connTimeOutLabel = new JLabel();
-        this.connTimeOutLabel.setText("连接超时");
+        this.connTimeOutLabel.setText("\u8fde\u63a5\u8d85\u65f6");
         panel2.add(this.connTimeOutLabel, new GridConstraints(3, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.connTimeOutTextField = new JTextField();
         this.connTimeOutTextField.setText("10000");
         panel2.add(this.connTimeOutTextField, new GridConstraints(3, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         this.readTimeOutLabel = new JLabel();
-        this.readTimeOutLabel.setText("读取超时");
+        this.readTimeOutLabel.setText("\u8bfb\u53d6\u8d85\u65f6");
         panel2.add(this.readTimeOutLabel, new GridConstraints(4, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.readTimeOutTextField = new JTextField();
         this.readTimeOutTextField.setText("60000");
         panel2.add(this.readTimeOutTextField, new GridConstraints(4, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         this.proxyHostLabel = new JLabel();
-        this.proxyHostLabel.setText("代理主机");
+        this.proxyHostLabel.setText("\u4ee3\u7406\u4e3b\u673a");
         panel2.add(this.proxyHostLabel, new GridConstraints(6, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.proxyHostTextField = new JTextField();
         this.proxyHostTextField.setText("127.0.0.1");
         panel2.add(this.proxyHostTextField, new GridConstraints(6, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         this.proxyPortLabel = new JLabel();
-        this.proxyPortLabel.setText("代理端口");
+        this.proxyPortLabel.setText("\u4ee3\u7406\u7aef\u53e3");
         panel2.add(this.proxyPortLabel, new GridConstraints(7, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.proxyPortTextField = new JTextField();
         this.proxyPortTextField.setText("8080");
         panel2.add(this.proxyPortTextField, new GridConstraints(7, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         this.remarkLabel = new JLabel();
-        this.remarkLabel.setText("备注");
+        this.remarkLabel.setText("\u5907\u6ce8");
         panel2.add(this.remarkLabel, new GridConstraints(8, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.remarkTextField = new JTextField();
-        this.remarkTextField.setText("备注");
+        this.remarkTextField.setText("\u5907\u6ce8");
         panel2.add(this.remarkTextField, new GridConstraints(8, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         this.groupIdLabel = new JLabel();
         this.groupIdLabel.setText("GROUP");
@@ -226,23 +226,23 @@ public class BasicShellSetting extends JFrame {
         this.groupIdTextField.setText("/");
         panel2.add(this.groupIdTextField, new GridConstraints(9, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         this.proxyLabel = new JLabel();
-        this.proxyLabel.setText("代理类型");
+        this.proxyLabel.setText("\u4ee3\u7406\u7c7b\u578b");
         panel2.add(this.proxyLabel, new GridConstraints(10, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.proxyComboBox = new JComboBox();
         panel2.add(this.proxyComboBox, new GridConstraints(10, 1, 1, 1, 0, 0, 2, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.encodingLabel = new JLabel();
-        this.encodingLabel.setText("编码");
+        this.encodingLabel.setText("\u7f16\u7801");
         panel2.add(this.encodingLabel, new GridConstraints(11, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.encodingComboBox = new JComboBox();
         this.encodingComboBox.setEditable(true);
         panel2.add(this.encodingComboBox, new GridConstraints(11, 1, 1, 1, 0, 0, 2, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.payloadLabel = new JLabel();
-        this.payloadLabel.setText("有效载荷");
+        this.payloadLabel.setText("\u6709\u6548\u8f7d\u8377");
         panel2.add(this.payloadLabel, new GridConstraints(12, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.payloadComboBox = new JComboBox();
         panel2.add(this.payloadComboBox, new GridConstraints(12, 1, 1, 1, 0, 0, 2, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.cryptionLabel = new JLabel();
-        this.cryptionLabel.setText("加密器");
+        this.cryptionLabel.setText("\u52a0\u5bc6\u5668");
         panel2.add(this.cryptionLabel, new GridConstraints(13, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.cryptionComboBox = new JComboBox();
         panel2.add(this.cryptionComboBox, new GridConstraints(13, 1, 1, 1, 0, 0, 2, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
@@ -255,21 +255,21 @@ public class BasicShellSetting extends JFrame {
         panel3.setLayout(new GridLayoutManager(1, 2, new Insets(0, 0, 0, 0), -1, -1));
         panel2.add(panel3, new GridConstraints(15, 0, 1, 2, 0, 3, 3, 3, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.setButton = new JButton();
-        this.setButton.setText("添加");
+        this.setButton.setText("\u6dfb\u52a0");
         this.setButton.setVerticalAlignment(0);
         panel3.add(this.setButton, new GridConstraints(0, 0, 1, 1, 0, 3, 3, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.testButton = new JButton();
-        this.testButton.setText("测试连接");
+        this.testButton.setText("\u6d4b\u8bd5\u8fde\u63a5");
         panel3.add(this.testButton, new GridConstraints(0, 1, 1, 1, 0, 3, 3, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.errRetryNumLabel = new JLabel();
-        this.errRetryNumLabel.setText("错误重试");
+        this.errRetryNumLabel.setText("\u9519\u8bef\u91cd\u8bd5");
         panel2.add(this.errRetryNumLabel, new GridConstraints(5, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.errRetryNumTextField = new JTextField();
         this.errRetryNumTextField.setText("0");
         panel2.add(this.errRetryNumTextField, new GridConstraints(5, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         JPanel panel4 = new JPanel();
         panel4.setLayout(new GridLayoutManager(1, 1, new Insets(0, 0, 0, 0), -1, -1));
-        this.tabbedPane1.addTab("请求配置", panel4);
+        this.tabbedPane1.addTab("\u8bf7\u6c42\u914d\u7f6e", panel4);
         JSplitPane splitPane1 = new JSplitPane();
         splitPane1.setDividerLocation(150);
         splitPane1.setOrientation(0);
@@ -282,19 +282,19 @@ public class BasicShellSetting extends JFrame {
         this.leftTextScrollPane.setIconRowHeaderEnabled(false);
         this.leftTextScrollPane.setLineNumbersEnabled(false);
         splitPane2.setLeftComponent(this.leftTextScrollPane);
-        this.leftTextScrollPane.setBorder(BorderFactory.createTitledBorder((Border)null, "左边追加数据", 0, 0, (Font)null, (Color)null));
+        this.leftTextScrollPane.setBorder(BorderFactory.createTitledBorder((Border)null, "\u5de6\u8fb9\u8ffd\u52a0\u6570\u636e", 0, 0, (Font)null, (Color)null));
         this.leftTextArea.setEncoding("UTF-8");
         this.leftTextScrollPane.setViewportView(this.leftTextArea);
         this.rightTextScrollPane.setIconRowHeaderEnabled(false);
         this.rightTextScrollPane.setLineNumbersEnabled(false);
         splitPane2.setRightComponent(this.rightTextScrollPane);
-        this.rightTextScrollPane.setBorder(BorderFactory.createTitledBorder((Border)null, "右边追加数据", 0, 0, (Font)null, (Color)null));
+        this.rightTextScrollPane.setBorder(BorderFactory.createTitledBorder((Border)null, "\u53f3\u8fb9\u8ffd\u52a0\u6570\u636e", 0, 0, (Font)null, (Color)null));
         this.rightTextArea.setEncoding("UTF-8");
         this.rightTextScrollPane.setViewportView(this.rightTextArea);
         this.headersTextScrollPane.setIconRowHeaderEnabled(false);
         this.headersTextScrollPane.setLineNumbersEnabled(false);
         splitPane1.setLeftComponent(this.headersTextScrollPane);
-        this.headersTextScrollPane.setBorder(BorderFactory.createTitledBorder((Border)null, "协议头", 0, 0, (Font)null, (Color)null));
+        this.headersTextScrollPane.setBorder(BorderFactory.createTitledBorder((Border)null, "\u534f\u8bae\u5934", 0, 0, (Font)null, (Color)null));
         this.headersTextArea.setEncoding("UTF-8");
         this.headersTextArea.setFractionalFontMetricsEnabled(false);
         this.headersTextArea.setLineWrap(false);
@@ -305,40 +305,40 @@ public class BasicShellSetting extends JFrame {
         this.headersTextScrollPane.setViewportView(this.headersTextArea);
         JPanel panel5 = new JPanel();
         panel5.setLayout(new GridLayoutManager(1, 1, new Insets(0, 0, 0, 0), -1, -1));
-        this.tabbedPane1.addTab("其它配置", panel5);
+        this.tabbedPane1.addTab("\u5176\u5b83\u914d\u7f6e", panel5);
         JPanel panel6 = new JPanel();
         panel6.setLayout(new GridLayoutManager(6, 2, new Insets(0, 80, 0, 80), -1, -1));
         panel5.add(panel6, new GridConstraints(0, 0, 1, 1, 1, 1, 3, 3, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         JLabel label1 = new JLabel();
-        label1.setText("大文件单次上传大小");
+        label1.setText("\u5927\u6587\u4ef6\u5355\u6b21\u4e0a\u4f20\u5927\u5c0f");
         label1.setVerticalTextPosition(0);
         panel6.add(label1, new GridConstraints(1, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.bigFileUploadByteNumTextField = new JTextField();
         panel6.add(this.bigFileUploadByteNumTextField, new GridConstraints(1, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         JLabel label2 = new JLabel();
-        label2.setText("大文件单次下载大小");
+        label2.setText("\u5927\u6587\u4ef6\u5355\u6b21\u4e0b\u8f7d\u5927\u5c0f");
         panel6.add(label2, new GridConstraints(2, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.bigFileDownloadByteNumTextField = new JTextField();
         panel6.add(this.bigFileDownloadByteNumTextField, new GridConstraints(2, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         JLabel label3 = new JLabel();
-        label3.setText("客户端SSL证书路径");
+        label3.setText("\u5ba2\u6237\u7aefSSL\u8bc1\u4e66\u8def\u5f84");
         panel6.add(label3, new GridConstraints(4, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.clientSSLCertPathTextField = new JTextField();
         panel6.add(this.clientSSLCertPathTextField, new GridConstraints(4, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         JLabel label4 = new JLabel();
-        label4.setText("客户端证书密码");
+        label4.setText("\u5ba2\u6237\u7aef\u8bc1\u4e66\u5bc6\u7801");
         panel6.add(label4, new GridConstraints(5, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.clientSSLCertPasswordTextField = new JTextField();
         panel6.add(this.clientSSLCertPasswordTextField, new GridConstraints(5, 1, 1, 1, 8, 1, 4, 0, (Dimension)null, new Dimension(150, -1), (Dimension)null, 0, false));
         JLabel label5 = new JLabel();
-        label5.setText("是否合并响应包Cookie");
+        label5.setText("\u662f\u5426\u5408\u5e76\u54cd\u5e94\u5305Cookie");
         panel6.add(label5, new GridConstraints(0, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.isMergeResponseCookieCheckBox = new JCheckBox();
         this.isMergeResponseCookieCheckBox.setSelected(true);
-        this.isMergeResponseCookieCheckBox.setText("合并");
+        this.isMergeResponseCookieCheckBox.setText("\u5408\u5e76");
         panel6.add(this.isMergeResponseCookieCheckBox, new GridConstraints(0, 1, 1, 1, 8, 0, 3, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         JLabel label6 = new JLabel();
-        label6.setText("大文件下载线程数量");
+        label6.setText("\u5927\u6587\u4ef6\u4e0b\u8f7d\u7ebf\u7a0b\u6570\u91cf");
         panel6.add(label6, new GridConstraints(3, 0, 1, 1, 8, 0, 0, 0, (Dimension)null, (Dimension)null, (Dimension)null, 0, false));
         this.bigFileDownloadThreadNumTextField = new JTextField();
         this.bigFileDownloadThreadNumTextField.setText("10");
@@ -424,16 +424,15 @@ public class BasicShellSetting extends JFrame {
         int oldErrRetry = this.shellContext.getMaxErrRetry();
         if (this.updateTempShellEntity()) {
             if (this.shellContext.initShellOpertion()) {
-                GOptionPane.showMessageDialog(this, "Success!", "提示", 1);
+                GOptionPane.showMessageDialog(this, "Success!", "\u63d0\u793a", 1);
                 Log.log(String.format("CloseShellState: %s\tShellId: %s\tShellHash: %s", this.shellContext.getPayloadModule().close(), this.shellContext.getId(), this.shellContext.hashCode()));
             } else {
-                GOptionPane.showMessageDialog(this, "测试失败!", "提示", 2);
+                GOptionPane.showMessageDialog(this, "\u6d4b\u8bd5\u5931\u8d25!", "\u63d0\u793a", 2);
             }
         } else {
-            GOptionPane.showMessageDialog(this, this.error, "提示", 2);
+            GOptionPane.showMessageDialog(this, this.error, "\u63d0\u793a", 2);
             this.error = null;
         }
-
         this.shellContext.setMaxErrRetry(oldErrRetry);
     }
 
@@ -445,24 +444,23 @@ public class BasicShellSetting extends JFrame {
                 if (Db.updateShell(this.shellContext) > 0) {
                     this.shellContext.setGroup(this.currentGroup);
                     this.shellContext.setC2ProfileName2(this.currentC2profile);
-                    GOptionPane.showMessageDialog(this, "修改成功", "提示", 1);
+                    GOptionPane.showMessageDialog(this, "\u4fee\u6539\u6210\u529f", "\u63d0\u793a", 1);
                     this.dispose();
                 } else {
-                    GOptionPane.showMessageDialog(this, "修改失败", "提示", 2);
+                    GOptionPane.showMessageDialog(this, "\u4fee\u6539\u5931\u8d25", "\u63d0\u793a", 2);
                 }
             } else if (Db.addShell(this.shellContext) > 0) {
                 this.shellContext.setGroup(this.currentGroup);
                 this.shellContext.setC2ProfileName2(this.currentC2profile);
-                GOptionPane.showMessageDialog(this, "添加成功", "提示", 1);
+                GOptionPane.showMessageDialog(this, "\u6dfb\u52a0\u6210\u529f", "\u63d0\u793a", 1);
                 this.dispose();
             } else {
-                GOptionPane.showMessageDialog(this, "添加失败", "提示", 2);
+                GOptionPane.showMessageDialog(this, "\u6dfb\u52a0\u5931\u8d25", "\u63d0\u793a", 2);
             }
         } else {
-            GOptionPane.showMessageDialog(this, this.error, "提示", 2);
+            GOptionPane.showMessageDialog(this, this.error, "\u63d0\u793a", 2);
             this.error = null;
         }
-
     }
 
     private boolean updateTempShellEntity() {
@@ -527,7 +525,7 @@ public class BasicShellSetting extends JFrame {
             this.shellContext.setClientCertPassword(this.clientSSLCertPasswordTextField.getText());
             return true;
         } else {
-            this.error = "请检查  url password secretKey payload cryption encoding 是否填写完整";
+            this.error = "\u8bf7\u68c0\u67e5  url password secretKey payload cryption encoding \u662f\u5426\u586b\u5199\u5b8c\u6574";
             return false;
         }
     }
