@@ -1,7 +1,8 @@
 # GSL5 — Godzilla Super Loader 5
 
 ##BUG反馈群
-![Uploading b0cec230d89d19d0265da36a93850f74.jpg…]()
+<img width="1080" height="2400" alt="b0cec230d89d19d0265da36a93850f74" src="https://github.com/user-attachments/assets/63fc59c7-4870-4bb6-a151-9633c70404a7" />
+
 
 
 
