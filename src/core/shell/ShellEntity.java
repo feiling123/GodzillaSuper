@@ -302,6 +302,10 @@ public class ShellEntity {
 
     public void setEncoding(String encoding) {
         this.encoding = encoding;
+        // Payload caches Encoding at init; update charset in-place so shell/payload stay in sync
+        if (this.encodingModule != null) {
+            this.encodingModule.setCharsetString(encoding == null ? "UTF-8" : encoding);
+        }
     }
 
     public C2Profile getCurrentProfile() {

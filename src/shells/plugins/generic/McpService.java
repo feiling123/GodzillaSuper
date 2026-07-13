@@ -54,9 +54,12 @@ import util.functions;
 public class McpService implements Plugin {
 
     private static final int DEFAULT_PORT = 9123;
+    private static final String DEFAULT_BIND = "0.0.0.0";
     private static HttpServer server;
     private static boolean running = false;
     private static int port = DEFAULT_PORT;
+    /** bind address: 0.0.0.0 / 127.0.0.1 / NIC IP */
+    private static String bindHost = DEFAULT_BIND;
     private static final ConcurrentLinkedQueue<HttpExchange> sseClients = new ConcurrentLinkedQueue<>();
     private static final Yaml yaml = new Yaml();
     private static final java.util.concurrent.ConcurrentHashMap<String, ShellEntity> shellCache = new java.util.concurrent.ConcurrentHashMap<>();
@@ -64,6 +67,7 @@ public class McpService implements Plugin {
 
     private JPanel panel;
     private JTextField portField;
+    private JTextField hostField;
     private JButton startBtn;
     private JButton stopBtn;
     private JTextArea logArea;
@@ -73,6 +77,10 @@ public class McpService implements Plugin {
     public McpService() {
         panel = new JPanel(new BorderLayout(6, 6));
         JPanel topPanel = new JPanel();
+        topPanel.add(new JLabel("\u7ed1\u5b9a:"));
+        hostField = new JTextField(DEFAULT_BIND, 12);
+        hostField.setToolTipText("0.0.0.0=\u5168\u7f51\u5361  127.0.0.1=\u4ec5\u672c\u673a  \u6216\u586b\u7f51\u5361IP");
+        topPanel.add(hostField);
         topPanel.add(new JLabel("\u7aef\u53e3:"));
         portField = new JTextField(String.valueOf(DEFAULT_PORT), 6);
         topPanel.add(portField);
@@ -101,19 +109,24 @@ public class McpService implements Plugin {
     private void startMcpServer() {
         if (running) return;
         try { port = Integer.parseInt(portField.getText().trim()); } catch (Exception e) { port = DEFAULT_PORT; }
+        bindHost = normalizeBindHost(hostField != null ? hostField.getText() : DEFAULT_BIND);
         try {
-            server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
+            server = HttpServer.create(new InetSocketAddress(java.net.InetAddress.getByName(bindHost), port), 0);
             server.setExecutor(Executors.newFixedThreadPool(4));
             server.createContext("/sse", new SseHandler());
             server.createContext("/message", new MessageHandler());
-            server.createContext("/health", (ex) -> sendJson(ex, 200, j("status","ok","running",true,"port",port)));
+            server.createContext("/health", (ex) -> sendJson(ex, 200, j("status","ok","running",true,"port",port,"bind",bindHost,"urls",listAccessUrls())));
             server.createContext("/config", new ConfigHandler());
-                        server.start();
+            server.start();
             running = true;
             startBtn.setEnabled(false);
             stopBtn.setEnabled(true);
-            statusLabel.setText("\u72b6\u6001: \u8fd0\u884c\u4e2d (http://127.0.0.1:" + port + ")");
-            log("[MCP] \u670d\u52a1\u5df2\u542f\u52a8 http://127.0.0.1:" + port);
+            String primary = preferredAccessHost();
+            statusLabel.setText("\u72b6\u6001: \u8fd0\u884c\u4e2d (" + bindHost + ":" + port + ")");
+            log("[MCP] \u670d\u52a1\u5df2\u542f\u52a8 bind=" + bindHost + ":" + port);
+            log("[MCP] \u8bbf\u95ee\u5730\u5740:");
+            for (String u : listAccessUrls()) log("  " + u);
+            log("[MCP] \u63a8\u8350 SSE: http://" + primary + ":" + port + "/sse");
         } catch (Exception e) {
             log("[MCP] \u542f\u52a8\u5931\u8d25: " + e.getMessage());
             GOptionPane.showMessageDialog(panel, "\u542f\u52a8\u5931\u8d25: " + e.getMessage(), "\u9519\u8bef", 2);
@@ -121,8 +134,13 @@ public class McpService implements Plugin {
     }
 
         private void writeClaudeConfig() {
-        String json = "{\n" + "  \"mcpServers\": {\n" + "    \"gsl5\": {\n" + "      \"type\": \"sse\",\n" + "      \"url\": \"http://127.0.0.1:" + port + "/sse\"\n" + "    }\n" + "  }\n" + "}";
+        String host = preferredAccessHost();
+        String json = buildMcpJson(host);
         StringBuilder msg = new StringBuilder();
+        msg.append("bind: ").append(bindHost).append(":").append(port).append("\n");
+        msg.append("access URLs:\n");
+        for (String u : listAccessUrls()) msg.append("  ").append(u).append("\n");
+        msg.append("config host: ").append(host).append("\n\n");
         // 1. Write to ~/.claude/mcp.json
         String claudePath = System.getProperty("user.home") + "/.claude/mcp.json";
         try {
@@ -167,23 +185,38 @@ public class McpService implements Plugin {
         log("[MCP] \u670d\u52a1\u5df2\u505c\u6b62");
     }
 
+    /** headless: bind all NICs by default */
     public static void startHeadless(int p) {
+        startHeadless(p, DEFAULT_BIND);
+    }
+
+    /**
+     * headless start with bind host.
+     * @param p port
+     * @param host 0.0.0.0 / 127.0.0.1 / NIC IP
+     */
+    public static void startHeadless(int p, String host) {
         if (p <= 0) port = DEFAULT_PORT; else port = p;
-        System.setProperty("java.awt.headless", "true"); // 禁止 AWT 弹窗，防止 GOptionPane 阻塞 MCP
+        bindHost = normalizeBindHost(host);
+        System.setProperty("java.awt.headless", "true"); // \u7981\u6b62 AWT \u5f39\u7a97\uff0c\u9632\u6b62 GOptionPane \u963b\u585e MCP
         try {
-            server = HttpServer.create(new InetSocketAddress("0.0.0.0", port), 0);
+            server = HttpServer.create(new InetSocketAddress(java.net.InetAddress.getByName(bindHost), port), 0);
             server.setExecutor(Executors.newFixedThreadPool(4));
             McpService dummy = new McpService();
             server.createContext("/sse", dummy.new SseHandler());
             server.createContext("/message", dummy.new MessageHandler());
             server.createContext("/health", (ex) -> {
-                try { sendJson(ex, 200, j("status","ok","running",true,"port",port)); } catch (IOException ignored) {}
+                try { sendJson(ex, 200, j("status","ok","running",true,"port",port,"bind",bindHost,"urls",listAccessUrls())); } catch (IOException ignored) {}
             });
             server.createContext("/config", dummy.new ConfigHandler());
-                        server.start();
+            server.start();
             running = true;
-            Log.log("[MCP] Headless server started on http://127.0.0.1:" + port);
-            System.out.println("[MCP] Headless server started on http://127.0.0.1:" + port);
+            String primary = preferredAccessHost();
+            Log.log("[MCP] Headless bind=" + bindHost + ":" + port);
+            System.out.println("[MCP] Headless bind=" + bindHost + ":" + port);
+            System.out.println("[MCP] Access URLs:");
+            for (String u : listAccessUrls()) System.out.println("  " + u);
+            System.out.println("[MCP] Recommended SSE: http://" + primary + ":" + port + "/sse");
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 if (server != null) { server.stop(0); running = false; }
                 System.out.println("[MCP] Server stopped.");
@@ -198,6 +231,103 @@ public class McpService implements Plugin {
             System.err.println("[MCP] Failed to start: " + e.getMessage());
             System.exit(1);
         }
+    }
+
+    private static String normalizeBindHost(String host) {
+        if (host == null) return DEFAULT_BIND;
+        String h = host.trim();
+        if (h.isEmpty() || "*".equals(h) || "any".equalsIgnoreCase(h) || "all".equalsIgnoreCase(h)) return DEFAULT_BIND;
+        if ("localhost".equalsIgnoreCase(h)) return "127.0.0.1";
+        return h;
+    }
+
+    /** Prefer a real LAN IPv4 for external clients; fallback 127.0.0.1 */
+    private static String preferredAccessHost() {
+        if (bindHost != null && !bindHost.isEmpty()
+                && !"0.0.0.0".equals(bindHost) && !"/0.0.0.0".equals(bindHost)
+                && !"::".equals(bindHost) && !"/::".equals(bindHost)) {
+            return bindHost.startsWith("/") ? bindHost.substring(1) : bindHost;
+        }
+        for (String ip : listLocalIpv4()) {
+            if (!ip.startsWith("127.")) return ip;
+        }
+        return "127.0.0.1";
+    }
+
+    private static java.util.List<String> listLocalIpv4() {
+        java.util.LinkedHashSet<String> ips = new java.util.LinkedHashSet<>();
+        ips.add("127.0.0.1");
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> nics = java.net.NetworkInterface.getNetworkInterfaces();
+            while (nics != null && nics.hasMoreElements()) {
+                java.net.NetworkInterface ni = nics.nextElement();
+                try {
+                    if (!ni.isUp() || ni.isLoopback() || ni.isVirtual()) continue;
+                } catch (Exception ignored) { continue; }
+                java.util.Enumeration<java.net.InetAddress> addrs = ni.getInetAddresses();
+                while (addrs.hasMoreElements()) {
+                    java.net.InetAddress a = addrs.nextElement();
+                    if (a instanceof java.net.Inet4Address && !a.isLoopbackAddress()) {
+                        ips.add(a.getHostAddress());
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return new java.util.ArrayList<>(ips);
+    }
+
+    /** All useful access base URLs for current bind/port */
+    private static java.util.List<String> listAccessUrls() {
+        java.util.LinkedHashSet<String> urls = new java.util.LinkedHashSet<>();
+        if (bindHost != null && !"0.0.0.0".equals(bindHost) && !"::".equals(bindHost)
+                && !bindHost.isEmpty()) {
+            String h = bindHost.startsWith("/") ? bindHost.substring(1) : bindHost;
+            urls.add("http://" + h + ":" + port);
+            if (!"127.0.0.1".equals(h)) urls.add("http://127.0.0.1:" + port);
+        } else {
+            for (String ip : listLocalIpv4()) urls.add("http://" + ip + ":" + port);
+        }
+        return new java.util.ArrayList<>(urls);
+    }
+
+    private static String buildMcpJson(String host) {
+        if (host == null || host.isEmpty()) host = preferredAccessHost();
+        return "{\n" +
+                "  \"mcpServers\": {\n" +
+                "    \"gsl5\": {\n" +
+                "      \"type\": \"sse\",\n" +
+                "      \"url\": \"http://" + host + ":" + port + "/sse\"\n" +
+                "    }\n" +
+                "  }\n" +
+                "}";
+    }
+
+    /** Resolve public endpoint host from request Host header (supports NIC IP access). */
+    private static String resolveRequestHost(HttpExchange ex) {
+        try {
+            java.util.List<String> hosts = ex.getRequestHeaders().get("Host");
+            if (hosts != null && !hosts.isEmpty()) {
+                String h = hosts.get(0);
+                if (h != null && !h.isEmpty()) {
+                    // Host may be "ip:port" or "[ipv6]:port"
+                    if (h.startsWith("[")) {
+                        int rb = h.indexOf(']');
+                        if (rb > 0) return h.substring(1, rb);
+                    }
+                    int colon = h.lastIndexOf(':');
+                    if (colon > 0 && h.indexOf(':') == colon) return h.substring(0, colon); // ipv4:port
+                    return h;
+                }
+            }
+        } catch (Exception ignored) {}
+        try {
+            java.net.InetSocketAddress local = ex.getLocalAddress();
+            if (local != null && local.getAddress() != null) {
+                String ha = local.getAddress().getHostAddress();
+                if (ha != null && !"0.0.0.0".equals(ha) && !ha.startsWith("0:0:0:0")) return ha;
+            }
+        } catch (Exception ignored) {}
+        return preferredAccessHost();
     }
 
 
@@ -226,7 +356,8 @@ public class McpService implements Plugin {
             ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
             ex.sendResponseHeaders(200, 0);
             sseClients.add(ex);
-            String endpoint = "http://127.0.0.1:" + port + "/message";
+            // Use request Host so LAN clients get NIC IP endpoint, not hardcoded 127.0.0.1
+            String endpoint = "http://" + resolveRequestHost(ex) + ":" + port + "/message";
             try {
                 OutputStream os = ex.getResponseBody();
                 os.write(("event: endpoint\ndata: " + endpoint + "\n\n").getBytes(StandardCharsets.UTF_8));
@@ -300,16 +431,17 @@ public class McpService implements Plugin {
         sb.append(t("shell_list","\u5217\u51fa\u6240\u6709 Shell \u914d\u7f6e", p("group",s("\u5206\u7ec4\uff0c\u9ed8\u8ba4 /"))));
         sb.append(",").append(t("shell_get","\u83b7\u53d6\u5355\u4e2a Shell \u5b8c\u6574\u914d\u7f6e", p("shellId",s("\u5fc5\u586b"))));
         sb.append(",").append(t("shell_add","\u6dfb\u52a0\u65b0 WebShell(\u4ec5\u4fdd\u5b58\u914d\u7f6e,\u4e0d\u751f\u6210\u6587\u4ef6,\u4e0d\u8fde\u63a5)", p("url",s("\u5fc5\u586b"),"password",s("\u5fc5\u586b"),"secretKey",s("\u5fc5\u586b"),"payload",s("\u5fc5\u586b"),"cryption",s("\u5fc5\u586b"),"encoding",s("\u9ed8\u8ba4UTF-8"),"remark",s(""),"headers",s(""),"proxyType",s(""),"proxyHost",s(""),"proxyPort",s(""),"connTimeout",i(),"readTimeout",i())));
-        sb.append(",").append(t("shell_edit","\u7f16\u8f91 Shell \u914d\u7f6e", p("shellId",s("\u5fc5\u586b"),"url",s(""),"password",s(""),"secretKey",s(""),"payload",s(""),"cryption",s(""),"remark",s(""),"headers",s(""),"proxyType",s(""),"proxyHost",s(""),"connTimeout",i(),"readTimeout",i(),"c2Profile",s(""))));
+        sb.append(",").append(t("shell_edit","\u7f16\u8f91 Shell \u914d\u7f6e", p("shellId",s("\u5fc5\u586b"),"url",s(""),"password",s(""),"secretKey",s(""),"payload",s(""),"cryption",s(""),"encoding",s("UTF-8/GBK\u7b49"),"remark",s(""),"headers",s(""),"proxyType",s(""),"proxyHost",s(""),"connTimeout",i(),"readTimeout",i(),"c2Profile",s(""))));
         sb.append(",").append(t("shell_delete","\u5220\u9664 Shell", p("shellId",s("\u5fc5\u586b"))));
         // System (2)
-        sb.append(",").append(t("shell_info","\u83b7\u53d6\u8fdc\u7a0b\u7cfb\u7edf\u4fe1\u606f", p("shellId",s("\u5fc5\u586b"))));
-        sb.append(",").append(t("shell_test","\u6d4b\u8bd5 Shell \u8fde\u63a5", p("shellId",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("shell_info","\u83b7\u53d6\u8fdc\u7a0b\u7cfb\u7edf\u4fe1\u606f(DB encoding\u81ea\u52a8\u5e26\u5165;\u7a7a\u5219\u81ea\u68c0)", p("shellId",s("\u5fc5\u586b"),"encoding",s("\u53ef\u9009:GBK/UTF-8/\u6216auto"))));
+        sb.append(",").append(t("shell_test","\u6d4b\u8bd5 Shell \u8fde\u63a5(DB encoding\u81ea\u52a8\u5e26\u5165)", p("shellId",s("\u5fc5\u586b"),"encoding",s("\u53ef\u9009:GBK/UTF-8/auto"))));
+        sb.append(",").append(t("shell_detect_encoding","\u81ea\u52a8\u68c0\u6d4b\u8fdc\u7a0b\u63a7\u5236\u53f0\u7f16\u7801(chcp/locale)\u5e76\u5199\u56deDB", p("shellId",s("\u5fc5\u586b"),"persist",s("\u9ed8\u8ba4true,\u4f20false\u53ea\u68c0\u4e0d\u5199"))));
         // Command (1)
-        sb.append(",").append(t("shell_exec","\u6267\u884c\u7cfb\u7edf\u547d\u4ee4", p("shellId",s("\u5fc5\u586b"),"command",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("shell_exec","\u6267\u884c\u7cfb\u7edf\u547d\u4ee4", p("shellId",s("\u5fc5\u586b"),"command",s("\u5fc5\u586b"),"encoding",s("\u53ef\u9009:GBK/UTF-8/\u6216auto"),"os",s("\u53ef\u9009 win/linux"))));
         // File ops (12)
-        sb.append(",").append(t("file_list","\u5217\u51fa\u76ee\u5f55(\u539f\u751fAPI,\u7ed3\u6784\u5316\u8f93\u51fa)", p("shellId",s("\u5fc5\u586b"),"path",s("\u9ed8\u8ba4\u5f53\u524d\u76ee\u5f55"))));
-        sb.append(",").append(t("file_read","\u8bfb\u53d6\u6587\u4ef6\u5185\u5bb9(\u9002\u5408\u5c0f\u6587\u4ef6/\u914d\u7f6e\u6587\u4ef6,>512KB\u81ea\u52a8\u63d0\u793a\u7528file_download_local)", p("shellId",s("\u5fc5\u586b"),"path",s("\u5fc5\u586b"))));
+        sb.append(",").append(t("file_list","\u5217\u51fa\u76ee\u5f55(\u539f\u751fAPI,\u7ed3\u6784\u5316\u8f93\u51fa)", p("shellId",s("\u5fc5\u586b"),"path",s("\u9ed8\u8ba4\u5f53\u524d\u76ee\u5f55"),"encoding",s("\u53ef\u9009:GBK/UTF-8/auto"))));
+        sb.append(",").append(t("file_read","\u8bfb\u53d6\u6587\u4ef6\u5185\u5bb9(\u9002\u5408\u5c0f\u6587\u4ef6/\u914d\u7f6e\u6587\u4ef6,>512KB\u81ea\u52a8\u63d0\u793a\u7528file_download_local)", p("shellId",s("\u5fc5\u586b"),"path",s("\u5fc5\u586b"),"encoding",s("\u53ef\u9009,\u9ed8\u8ba4\u7528Shell\u7f16\u7801"))));
         sb.append(",").append(t("file_upload_local","\u672c\u5730\u6587\u4ef6\u76f4\u4f20\u8fdc\u7a0b(\u670d\u52a1\u7aef\u8bfb\u6587\u4ef6,\u81ea\u52a8\u5206\u7247,\u4e0d\u7ecfAI)", p("shellId",s("\u5fc5\u586b"),"localPath",s("\u5fc5\u586b,\u672c\u5730\u8def\u5f84"),"remotePath",s("\u5fc5\u586b,\u8fdc\u7a0b\u8def\u5f84"))));
         sb.append(",").append(t("file_download_local","\u8fdc\u7a0b\u6587\u4ef6\u76f4\u63a5\u4fdd\u5b58\u5230\u672c\u5730(\u670d\u52a1\u7aef\u5199\u6587\u4ef6,\u4e0d\u7ecfAI)", p("shellId",s("\u5fc5\u586b"),"remotePath",s("\u5fc5\u586b,\u8fdc\u7a0b\u8def\u5f84"),"localPath",s("\u5fc5\u586b,\u672c\u5730\u4fdd\u5b58\u8def\u5f84"))));
         sb.append(",").append(t("file_delete","\u5220\u9664\u6587\u4ef6", p("shellId",s("\u5fc5\u586b"),"path",s("\u5fc5\u586b"))));
@@ -338,8 +470,8 @@ public class McpService implements Plugin {
         sb.append(",").append(t("settings_set","\u4fee\u6539\u5e94\u7528\u8bbe\u7f6e", p("key",s("\u5fc5\u586b"),"value",s("\u5fc5\u586b"))));
                 sb.append(",").append(t("config_read","\u8bfb\u53d6 config.yaml", p()));
         sb.append(",").append(t("config_write","\u5199\u5165 config.yaml", p("content",s("\u5185\u5bb9"))));
-        sb.append(",").append(t("mcp_config","\u751f\u6210 Claude MCP \u914d\u7f6e", p("outputPath",s("\u53ef\u9009"))));
-        sb.append(",").append(t("mcp_status","MCP \u670d\u52a1\u72b6\u6001", p()));
+        sb.append(",").append(t("mcp_config","\u751f\u6210 Claude MCP \u914d\u7f6e", p("outputPath",s("\u53ef\u9009"),"host",s("\u53ef\u9009,\u7f51\u5361IP/\u57df\u540d,auto=\u81ea\u52a8"))));
+        sb.append(",").append(t("mcp_status","MCP \u670d\u52a1\u72b6\u6001(\u542b\u7ed1\u5b9a\u5730\u5740/\u53ef\u8bbf\u95eeURL)", p()));
         sb.append(",").append(t("oplog_query","\u67e5\u8be2\u56e2\u961f\u64cd\u4f5c\u65e5\u5fd7", p("limit",i(),"action",s("\u53ef\u9009"))));
         sb.append(",").append(t("shell_backup","\u5907\u4efd Shell \u5217\u8868", p("genFile",s("\u53ef\u9009"))));
         sb.append(",").append(t("shell_count","Shell \u7edf\u8ba1", p("group",s("\u53ef\u9009"))));
@@ -374,6 +506,7 @@ public class McpService implements Plugin {
                 case "shell_batch_test": text = shellBatchTest(a); break;
                 case "shell_info":   text = shellInfo(a); break;
                 case "shell_test":   text = shellTest(a); break;
+                case "shell_detect_encoding": text = shellDetectEncoding(a); break;
                 case "shell_exec":   text = shellExec(a); break;
                 case "process_list": text = processList(a); break;
                 case "file_search":  text = fileSearch(a); break;
@@ -426,16 +559,324 @@ public class McpService implements Plugin {
 
     private ShellEntity getShellInit(Map<String, Object> a) {
         String sid = (String) a.get("shellId");
+        // encoding param: explicit charset, or "auto" to force re-detect
+        String encParam = a.containsKey("encoding") ? String.valueOf(a.get("encoding")) : null;
+        if (encParam != null && (encParam.isEmpty() || "null".equalsIgnoreCase(encParam))) encParam = null;
+        boolean forceAuto = encParam != null && "auto".equalsIgnoreCase(encParam.trim());
+        String encOverride = (encParam != null && !forceAuto) ? encParam.trim() : null;
+
         ShellEntity sh = shellCache.get(sid);
-        if (sh != null && sh.getPayloadModule() != null) return sh;
+        if (sh != null && sh.getPayloadModule() != null) {
+            // cached: reuse unless caller forces different encoding / auto re-detect
+            if (!forceAuto && (encOverride == null || encOverride.equalsIgnoreCase(safeEncoding(sh.getEncoding())))) {
+                return sh;
+            }
+            closeShell(sid);
+        }
         synchronized (shellCache) {
             sh = shellCache.get(sid);
-            if (sh != null && sh.getPayloadModule() != null) return sh;
+            if (sh != null && sh.getPayloadModule() != null) {
+                if (!forceAuto && (encOverride == null || encOverride.equalsIgnoreCase(safeEncoding(sh.getEncoding())))) {
+                    return sh;
+                }
+                closeShell(sid);
+            }
             sh = getShell(a);
+            // DB encoding is always loaded via Db.getOneShell -> setEncoding
+            String dbEncoding = sh.getEncoding() == null ? "" : sh.getEncoding().trim();
+            boolean dbEmpty = dbEncoding.isEmpty();
+            if (encOverride != null) {
+                sh.setEncoding(encOverride);
+            } else {
+                // init with DB value (fallback UTF-8); auto-detect only if empty or force auto
+                sh.setEncoding(safeEncoding(dbEncoding));
+            }
             if (!sh.initShellOpertion()) throw new RuntimeException("Shell \u521d\u59cb\u5316\u5931\u8d25");
+            if (encOverride != null) {
+                // explicit charset: keep and sync module only
+                sh.setEncoding(safeEncoding(sh.getEncoding()));
+            } else if (forceAuto || dbEmpty) {
+                // DB empty or encoding=auto: full detect (chcp + score) + persist
+                applyAutoEncoding(sh, dbEncoding, true);
+            } else {
+                // DB has value: cheap stage1 verify (one chcp/locale); correct if mismatch
+                verifyEncodingWithProbe(sh, dbEncoding);
+            }
             shellCache.put(sid, sh);
         }
         return sh;
+    }
+
+    /** \u8fd4\u56de\u975e\u7a7a encoding\uff0c\u7a7a/\u7a7a\u4e32/null \u56de\u9000 UTF-8 */
+    private static String safeEncoding(String encoding) {
+        if (encoding == null) return "UTF-8";
+        String e = encoding.trim();
+        return e.isEmpty() ? "UTF-8" : e;
+    }
+
+    /**
+     * Cheap verify: one chcp/locale probe. If remote codepage clearly differs from DB,
+     * switch + re-init + persist. Avoids multi-candidate scoring on every cold connect.
+     */
+    private void verifyEncodingWithProbe(ShellEntity sh, String dbEncoding) {
+        try {
+            Payload pl = sh.getPayloadModule();
+            if (pl == null) { sh.setEncoding(safeEncoding(dbEncoding)); return; }
+            String os = "";
+            try { os = pl.getOsInfo(); } catch (Exception ignored) {}
+            boolean isWin = os != null && os.toLowerCase().contains("win");
+            String probe = isWin
+                    ? pl.execCommand("chcp")
+                    : pl.execCommand("locale charmap 2>/dev/null || echo $LANG");
+            String fromProbe = parseEncodingFromProbe(probe, isWin);
+            String cur = safeEncoding(dbEncoding);
+            if (fromProbe != null && !fromProbe.equalsIgnoreCase(cur)) {
+                sh.setEncoding(fromProbe);
+                try { if (sh.getPayloadModule() != null) sh.getPayloadModule().close(); } catch (Exception ignored) {}
+                if (!sh.initShellOpertion()) {
+                    sh.setEncoding(cur);
+                    if (!sh.initShellOpertion()) throw new RuntimeException("Shell \u521d\u59cb\u5316\u5931\u8d25(encoding\u56de\u9000)");
+                    return;
+                }
+                try { Db.updateShell(sh); } catch (Exception ignored) {}
+            } else {
+                sh.setEncoding(cur);
+            }
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Exception ignored) {
+            sh.setEncoding(safeEncoding(dbEncoding));
+        }
+    }
+
+    /**
+     * Auto-detect remote console encoding after connect.
+     * Priority: chcp / locale -> score candidates -> OS heuristic.
+     * When persist=true and result differs from DB, write back via Db.updateShell.
+     */
+    private void applyAutoEncoding(ShellEntity sh, String dbEncoding, boolean persist) {
+        try {
+            String detected = detectRemoteEncoding(sh);
+            String cur = safeEncoding(sh.getEncoding());
+            if (detected == null || detected.isEmpty()) detected = cur;
+            if (!detected.equalsIgnoreCase(cur)) {
+                sh.setEncoding(detected);
+                // re-init so payload re-decodes basicsInfo with correct charset
+                try { if (sh.getPayloadModule() != null) sh.getPayloadModule().close(); } catch (Exception ignored) {}
+                if (!sh.initShellOpertion()) {
+                    // fallback to previous
+                    sh.setEncoding(cur);
+                    if (!sh.initShellOpertion()) throw new RuntimeException("Shell \u521d\u59cb\u5316\u5931\u8d25(encoding\u56de\u9000)");
+                    return;
+                }
+            } else {
+                sh.setEncoding(cur); // sync module charset
+            }
+            if (persist) {
+                String finalEnc = safeEncoding(sh.getEncoding());
+                if (dbEncoding == null || dbEncoding.isEmpty() || !finalEnc.equalsIgnoreCase(dbEncoding)) {
+                    try { Db.updateShell(sh); } catch (Exception ignored) {}
+                }
+            }
+        } catch (RuntimeException re) {
+            throw re;
+        } catch (Exception ignored) {
+            sh.setEncoding(safeEncoding(sh.getEncoding()));
+        }
+    }
+
+    /**
+     * MCP tool: force detect remote encoding, optionally persist to DB.
+     * Always re-detects (ignores cache encoding trust).
+     */
+    private String shellDetectEncoding(Map<String, Object> a) {
+        String sid = (String) a.get("shellId");
+        if (sid == null || sid.isEmpty()) return "\u7f3a\u5c11 shellId";
+        boolean persist = true;
+        if (a.containsKey("persist")) {
+            String p = String.valueOf(a.get("persist"));
+            persist = !("false".equalsIgnoreCase(p) || "0".equals(p) || "no".equalsIgnoreCase(p));
+        }
+        // force re-detect via encoding=auto path
+        java.util.HashMap<String, Object> args = new java.util.HashMap<>();
+        args.put("shellId", sid);
+        args.put("encoding", "auto");
+        // temporarily connect; applyAutoEncoding always runs on forceAuto
+        // but persist controlled here: do detect manually for report
+        closeShell(sid);
+        ShellEntity sh = getShell(args);
+        String before = sh.getEncoding() == null ? "" : sh.getEncoding().trim();
+        sh.setEncoding(safeEncoding(before));
+        if (!sh.initShellOpertion()) return "\u8fde\u63a5\u5931\u8d25\uff0c\u65e0\u6cd5\u68c0\u6d4b encoding";
+        String detected = detectRemoteEncoding(sh);
+        if (detected == null || detected.isEmpty()) detected = safeEncoding(before);
+
+        String probe = "";
+        try {
+            Payload pl = sh.getPayloadModule();
+            String os = pl != null ? pl.getOsInfo() : "";
+            boolean isWin = os != null && os.toLowerCase().contains("win");
+            probe = isWin ? pl.execCommand("chcp") : pl.execCommand("locale charmap 2>/dev/null || echo $LANG");
+            if (probe != null && probe.length() > 200) probe = probe.substring(0, 200);
+        } catch (Exception ignored) {}
+
+        boolean changed = !detected.equalsIgnoreCase(safeEncoding(before));
+        if (changed) {
+            sh.setEncoding(detected);
+            try { if (sh.getPayloadModule() != null) sh.getPayloadModule().close(); } catch (Exception ignored) {}
+            if (!sh.initShellOpertion()) {
+                sh.setEncoding(safeEncoding(before));
+                sh.initShellOpertion();
+                return "\u68c0\u6d4b\u5230 " + detected + " \u4f46\u91cd\u521d\u59cb\u5316\u5931\u8d25\uff0c\u5df2\u56de\u9000 " + safeEncoding(before);
+            }
+        } else {
+            sh.setEncoding(detected);
+        }
+        shellCache.put(sid, sh);
+        boolean saved = false;
+        if (persist && (before.isEmpty() || changed)) {
+            try { saved = Db.updateShell(sh) > 0; } catch (Exception e) { saved = false; }
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("shellId: ").append(sid).append("\n");
+        sb.append("before: ").append(before.isEmpty() ? "(empty)" : before).append("\n");
+        sb.append("detected: ").append(detected).append("\n");
+        sb.append("changed: ").append(changed).append("\n");
+        sb.append("persisted: ").append(saved).append("\n");
+        if (probe != null && !probe.isEmpty()) sb.append("probe: ").append(probe.trim()).append("\n");
+        return sb.toString();
+    }
+
+    /**
+     * Detect remote encoding.
+     * 1) Windows: chcp -> 936/GBK, 65001/UTF-8, 950/BIG5, 54936/GB18030
+     * 2) Linux: locale charmap / $LANG
+     * 3) Score candidates by running a tiny probe under each charset
+     * 4) OS fallback
+     */
+    private String detectRemoteEncoding(ShellEntity sh) {
+        Payload pl = sh.getPayloadModule();
+        if (pl == null) return safeEncoding(sh.getEncoding());
+
+        String os = "";
+        try { os = pl.getOsInfo(); } catch (Exception ignored) {}
+        boolean isWin = os != null && os.toLowerCase().contains("win");
+
+        // --- stage 1: code page / locale (ASCII digits survive wrong decode) ---
+        try {
+            String probe = isWin
+                    ? pl.execCommand("chcp")
+                    : pl.execCommand("locale charmap 2>/dev/null || echo $LANG");
+            String fromProbe = parseEncodingFromProbe(probe, isWin);
+            if (fromProbe != null) return fromProbe;
+        } catch (Exception ignored) {}
+
+        // --- stage 2: score candidates with sample output ---
+        String[] candidates = isWin
+                ? new String[]{"GBK", "GB18030", "UTF-8", "BIG5", "CP850"}
+                : new String[]{"UTF-8", "GBK", "GB18030", "ISO-8859-1"};
+        // Prefer DB value first if present
+        String dbHint = safeEncoding(sh.getEncoding());
+        java.util.LinkedHashSet<String> ordered = new java.util.LinkedHashSet<>();
+        ordered.add(dbHint);
+        for (String c : candidates) ordered.add(c);
+
+        String best = dbHint;
+        int bestScore = Integer.MIN_VALUE;
+        String saved = safeEncoding(sh.getEncoding());
+        for (String cand : ordered) {
+            try {
+                sh.setEncoding(cand);
+                String sample = isWin
+                        ? pl.execCommand("cmd /c echo \u4e2d\u6587& chcp")
+                        : pl.execCommand("printf '\\xe4\\xb8\\xad\\xe6\\x96\\x87\\n'; locale charmap 2>/dev/null; echo $LANG");
+                int score = scoreDecodedText(sample, cand, isWin);
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = cand;
+                }
+            } catch (Exception ignored) {}
+        }
+        // restore before caller decides re-init
+        sh.setEncoding(saved);
+
+        if (bestScore > 0) return best;
+
+        // --- stage 3: OS heuristic ---
+        return isWin ? "GBK" : "UTF-8";
+    }
+
+    /** Parse chcp / locale output into charset name. */
+    private static String parseEncodingFromProbe(String probe, boolean isWin) {
+        if (probe == null || probe.isEmpty()) return null;
+        String p = probe.toLowerCase();
+        // Prefer explicit "Active code page: NNN" / "cpNNN"
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?:code\\s*page|cp)\\s*[:\\s]*([0-9]{3,5})")
+                .matcher(p);
+        if (m.find()) {
+            String mapped = mapCodePage(m.group(1));
+            if (mapped != null) return mapped;
+        }
+        // bare digits common in chcp output
+        m = java.util.regex.Pattern.compile("\\b(65001|54936|936|950|437|850)\\b").matcher(p);
+        if (m.find()) {
+            String mapped = mapCodePage(m.group(1));
+            if (mapped != null) return mapped;
+        }
+        // text hints
+        if (p.contains("gb18030")) return "GB18030";
+        if (p.contains("gbk") || p.contains("gb2312") || p.contains("gb 2312")) return "GBK";
+        if (p.contains("big5")) return "BIG5";
+        if (p.contains("utf-8") || p.contains("utf8")) return "UTF-8";
+        if (p.contains("zh_cn.gbk") || p.contains("zh_cn.gb2312")) return "GBK";
+        if (p.contains("zh_tw") && p.contains("big5")) return "BIG5";
+        if (!isWin && (p.contains("ansi_x3.4") || p.contains("ascii"))) return "UTF-8";
+        return null;
+    }
+
+    private static String mapCodePage(String cp) {
+        if (cp == null) return null;
+        switch (cp.trim()) {
+            case "936": return "GBK";
+            case "54936": return "GB18030";
+            case "65001": return "UTF-8";
+            case "950": return "BIG5";
+            case "437":
+            case "850": return "CP850";
+            default: return null;
+        }
+    }
+
+    /**
+     * Higher is better. Rewards CJK + codepage hints; penalizes replacement/mojibake.
+     */
+    private static int scoreDecodedText(String text, String cand, boolean isWin) {
+        if (text == null) return Integer.MIN_VALUE / 2;
+        int score = 0;
+        int cjk = 0, repl = 0, mojibake = 0, ascii = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c == '\ufffd') repl++;
+            else if (c >= 0x4E00 && c <= 0x9FFF) cjk++;
+            else if (c < 128) ascii++;
+            // common UTF-8-as-Latin1 / GBK-as-UTF8 mojibake markers
+            if (c == '\u00c3' || c == '\u00e2' || c == '\u00c2' || c == '\ufffd') mojibake++;
+            if (c == '\u00e6' || c == '\u00e5' || c == '\u00e4') mojibake++; // utf8 chinese misread
+        }
+        score += cjk * 8;
+        score += Math.min(ascii, 40);
+        score -= repl * 20;
+        score -= mojibake * 3;
+        // bonus if probe text aligns with candidate
+        String low = text.toLowerCase();
+        if ("GBK".equalsIgnoreCase(cand) && (low.contains("936") || cjk > 0)) score += 30;
+        if ("UTF-8".equalsIgnoreCase(cand) && (low.contains("65001") || low.contains("utf-8") || low.contains("utf8"))) score += 30;
+        if ("BIG5".equalsIgnoreCase(cand) && low.contains("950")) score += 30;
+        if ("GB18030".equalsIgnoreCase(cand) && low.contains("54936")) score += 30;
+        if (isWin && "UTF-8".equalsIgnoreCase(cand) && low.contains("936")) score -= 40;
+        if (isWin && "GBK".equalsIgnoreCase(cand) && low.contains("65001")) score -= 20;
+        return score;
     }
 
     static void closeShell(String sid) {
@@ -541,7 +982,10 @@ public class McpService implements Plugin {
         if (a.containsKey("reqLeft")) sh.setReqLeft((String) a.get("reqLeft"));
         if (a.containsKey("reqRight")) sh.setReqRight((String) a.get("reqRight"));
         if (a.containsKey("c2Profile")) sh.setC2ProfileName((String) a.get("c2Profile"));
-        return Db.updateShell(sh) > 0 ? "\u7f16\u8f91\u6210\u529f" : "\u7f16\u8f91\u5931\u8d25";
+        int n = Db.updateShell(sh);
+        // \u914d\u7f6e\u53d8\u66f4\u540e\u5fc5\u987b\u6e05\u7f13\u5b58\uff0c\u5426\u5219 encoding \u7b49\u4ecd\u7528\u65e7\u4f1a\u8bdd
+        if (n > 0) closeShell(sh.getId());
+        return n > 0 ? "\u7f16\u8f91\u6210\u529f" : "\u7f16\u8f91\u5931\u8d25";
     }
 
     private String shellClone(Map<String, Object> a) {
@@ -576,11 +1020,12 @@ public class McpService implements Plugin {
                 } catch (Exception e) { shellCache.remove(sid); }
             }
             try {
-                ShellEntity sh = Db.getOneShell(sid);
-                boolean alive = sh.initShellOpertion();
-                if (alive) { shellCache.put(sid, sh); }
-                sb.append(alive ? "[OK] " : "[FAIL] ").append(sid).append(" ").append(url).append("\n");
-                if (alive) ok++; else fail++;
+                java.util.HashMap<String, Object> args = new java.util.HashMap<>();
+                args.put("shellId", sid);
+                ShellEntity sh = getShellInit(args);
+                sb.append("[OK] ").append(sid).append(" ").append(url)
+                  .append(" encoding=").append(safeEncoding(sh.getEncoding())).append("\n");
+                ok++;
             } catch (Exception ex) { sb.append("[ERR] ").append(sid).append(" ").append(ex.getMessage()).append("\n"); fail++; }
         }
         return "\u6279\u91cf\u6d4b\u8bd5: " + ok + " \u6210\u529f, " + fail + " \u5931\u8d25\n" + sb.toString();
@@ -600,21 +1045,22 @@ public class McpService implements Plugin {
         ShellEntity sh = getShellInit(a);
         Payload pl = sh.getPayloadModule();
         String info = pl.getBasicsInfo();
-        
-        return info;
+        String enc = safeEncoding(sh.getEncoding());
+        if (info == null || info.isEmpty()) return "(empty) encoding=" + enc;
+        // \u5728\u7ed3\u679c\u9996\u884c\u9644\u5e26\u5f53\u524d encoding\uff0c\u4fbf\u4e8e\u786e\u8ba4\u662f\u5426\u81ea\u52a8\u5e26\u4e0a
+        return "encoding: " + enc + "\n" + info;
     }
 
     private String shellTest(Map<String, Object> a) {
-        // Try cache first, fall back to fresh init
-        String sid = (String) a.get("shellId");
-        ShellEntity cached = shellCache.get(sid);
-        if (cached != null && cached.getPayloadModule() != null) {
-            try {
-                String info = cached.getPayloadModule().getBasicsInfo();
-                return "\u8fde\u63a5\u6b63\u5e38(\u7f13\u5b58) | " + (info != null ? info.split("\n")[0] : "");
-            } catch (Exception e) { shellCache.remove(sid); }
+        // \u7edf\u4e00\u8d70 getShellInit\uff0c\u4fdd\u8bc1 encoding \u88ab\u5e26\u5165/\u81ea\u52a8\u8865\u9f50
+        try {
+            ShellEntity sh = getShellInit(a);
+            String info = sh.getPayloadModule().getBasicsInfo();
+            String first = (info != null && !info.isEmpty()) ? info.split("\n")[0] : "";
+            return "\u8fde\u63a5\u6d4b\u8bd5\u6210\u529f | encoding=" + safeEncoding(sh.getEncoding()) + " | " + first;
+        } catch (Exception e) {
+            return "\u8fde\u63a5\u6d4b\u8bd5\u5931\u8d25: " + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
         }
-        return getShell(a).initShellOpertion() ? "\u8fde\u63a5\u6d4b\u8bd5\u6210\u529f" : "\u8fde\u63a5\u6d4b\u8bd5\u5931\u8d25";
     }
 
     private String processList(Map<String, Object> a) {
@@ -675,7 +1121,7 @@ public class McpService implements Plugin {
             command = "cmd /c " + command.replace("\n", " & ");
         }
         String result = pl.execCommand(command);
-        if (result == null || result.isEmpty()) return "(无输出)";
+        if (result == null || result.isEmpty()) return "(\u65e0\u8f93\u51fa)";
         return result;
     }
 
@@ -687,8 +1133,8 @@ public class McpService implements Plugin {
         if (path == null || path.isEmpty()) path = pl.currentDir();
         try {
             core.shell.GFile[] files = pl.getFile(path);
-            if (files == null || files.length == 0) return "目录为空: " + path;
-            StringBuilder sb = new StringBuilder("目录: " + path + "\n");
+            if (files == null || files.length == 0) return "\u76ee\u5f55\u4e3a\u7a7a: " + path;
+            StringBuilder sb = new StringBuilder("\u76ee\u5f55: " + path + "\n");
             for (core.shell.GFile f : files) {
                 sb.append(f.isDirectory() ? "D " : "F ");
                 sb.append(String.format("%-12s", f.isDirectory() ? "" : String.valueOf(f.length())));
@@ -697,7 +1143,7 @@ public class McpService implements Plugin {
             }
             return sb.toString();
         } catch (Exception e) {
-            return "列目录失败: " + e.getMessage();
+            return "\u5217\u76ee\u5f55\u5931\u8d25: " + e.getMessage();
         }
     }
 
@@ -708,12 +1154,18 @@ public class McpService implements Plugin {
         // Check file size first to avoid loading huge files into AI context
         long size = pl.getFileSize(path);
         if (size > 512 * 1024) {
-            return "文件过大(" + size + " bytes)，请用 file_download_local 下载到本地再查看";
+            return "\u6587\u4ef6\u8fc7\u5927(" + size + " bytes)\uff0c\u8bf7\u7528 file_download_local \u4e0b\u8f7d\u5230\u672c\u5730\u518d\u67e5\u770b";
         }
         byte[] data = pl.downloadFile(path);
-        if (data == null || data.length == 0) return "文件为空或不存在";
-        try { return new String(data, StandardCharsets.UTF_8); }
-        catch (Exception e) { return "[Binary] 请用 file_download_local 下载"; }
+        if (data == null || data.length == 0) return "\u6587\u4ef6\u4e3a\u7a7a\u6216\u4e0d\u5b58\u5728";
+        // \u4f18\u5148\u7528\u53c2\u6570 encoding\uff0c\u5176\u6b21 Shell \u914d\u7f6e\u7f16\u7801\uff08\u907f\u514d\u5199\u6b7b UTF-8 \u5bfc\u81f4\u4e2d\u6587\u4e71\u7801\uff09
+        String enc = a.containsKey("encoding") ? String.valueOf(a.get("encoding")) : safeEncoding(sh.getEncoding());
+        if (enc == null || enc.isEmpty() || "null".equalsIgnoreCase(enc)) enc = safeEncoding(sh.getEncoding());
+        try { return new String(data, enc); }
+        catch (Exception e) {
+            try { return new String(data, StandardCharsets.UTF_8); }
+            catch (Exception e2) { return "[Binary] \u8bf7\u7528 file_download_local \u4e0b\u8f7d"; }
+        }
     }
 
     private String fileDelete(Map<String, Object> a) {
@@ -778,9 +1230,9 @@ public class McpService implements Plugin {
     private String fileUploadLocal(Map<String, Object> a) {
         String localPath = (String) a.get("localPath");
         String remotePath = (String) a.get("remotePath");
-        if (localPath == null || remotePath == null) return "缺少 localPath 或 remotePath";
+        if (localPath == null || remotePath == null) return "\u7f3a\u5c11 localPath \u6216 remotePath";
         java.io.File f = new java.io.File(localPath);
-        if (!f.exists()) return "本地文件不存在: " + localPath;
+        if (!f.exists()) return "\u672c\u5730\u6587\u4ef6\u4e0d\u5b58\u5728: " + localPath;
         try {
             ShellEntity sh = getShellInit(a);
             Payload pl = sh.getPayloadModule();
@@ -797,28 +1249,28 @@ public class McpService implements Plugin {
                     pl.bigFileUpload(remotePath, pos, chunk);
                     pos += len;
                 }
-                return "上传成功! " + size + " bytes -> " + remotePath;
+                return "\u4e0a\u4f20\u6210\u529f! " + size + " bytes -> " + remotePath;
             } else {
                 boolean ok = pl.uploadFile(remotePath, data);
-                return ok ? "上传成功! " + size + " bytes -> " + remotePath : "上传失败";
+                return ok ? "\u4e0a\u4f20\u6210\u529f! " + size + " bytes -> " + remotePath : "\u4e0a\u4f20\u5931\u8d25";
             }
-        } catch (Exception ex) { return "上传失败: " + ex.getMessage(); }
+        } catch (Exception ex) { return "\u4e0a\u4f20\u5931\u8d25: " + ex.getMessage(); }
     }
 
     // --- Download remote file directly to local (server writes) ---
     private String fileDownloadLocal(Map<String, Object> a) {
         String remotePath = (String) a.get("remotePath");
         String localPath = (String) a.get("localPath");
-        if (remotePath == null || localPath == null) return "缺少 remotePath 或 localPath";
+        if (remotePath == null || localPath == null) return "\u7f3a\u5c11 remotePath \u6216 localPath";
         try {
             ShellEntity sh = getShellInit(a);
             Payload pl = sh.getPayloadModule();
             // Try small file first
             byte[] data = pl.downloadFile(remotePath);
-            if (data == null || data.length == 0) return "下载失败: 远程文件为空或不存在";
+            if (data == null || data.length == 0) return "\u4e0b\u8f7d\u5931\u8d25: \u8fdc\u7a0b\u6587\u4ef6\u4e3a\u7a7a\u6216\u4e0d\u5b58\u5728";
             java.nio.file.Files.write(java.nio.file.Paths.get(localPath), data);
-            return "下载成功! " + data.length + " bytes -> " + localPath;
-        } catch (Exception ex) { return "下载失败: " + ex.getMessage(); }
+            return "\u4e0b\u8f7d\u6210\u529f! " + data.length + " bytes -> " + localPath;
+        } catch (Exception ex) { return "\u4e0b\u8f7d\u5931\u8d25: " + ex.getMessage(); }
     }
 
 
@@ -831,7 +1283,7 @@ public class McpService implements Plugin {
         String configName = (String) a.get("configName");
         if (configName != null && !configName.isEmpty()) {
             dbInfo = sh.getDbInfo(configName);
-            if (dbInfo == null) return "未找到数据库配置: " + configName + "，用 db_configs(action=list) 查看已保存配置";
+            if (dbInfo == null) return "\u672a\u627e\u5230\u6570\u636e\u5e93\u914d\u7f6e: " + configName + "\uff0c\u7528 db_configs(action=list) \u67e5\u770b\u5df2\u4fdd\u5b58\u914d\u7f6e";
         }
         if (dbInfo == null) {
             dbInfo = new DbInfo();
@@ -948,12 +1400,12 @@ public class McpService implements Plugin {
         String genFile = (String) a.get("genFile");
         String obfLevel = (String) a.getOrDefault("obfuscation", "default");
         if (cryptionRaw == null || genFile == null)
-            return "缺少必填参数。必填: cryption, genFile";
+            return "\u7f3a\u5c11\u5fc5\u586b\u53c2\u6570\u3002\u5fc5\u586b: cryption, genFile";
         if (!"default".equals(obfLevel)) { Db.updateSetingKV("godMode", obfLevel); }
         // Fuzzy match cryption name (user may say aesbase64/java_c2/gzip etc.)
         String cryption = resolveCryption(payload, cryptionRaw);
         if (cryption == null) {
-            StringBuilder avail = new StringBuilder("未找到加密器: " + cryptionRaw + "\n可用加密器:\n");
+            StringBuilder avail = new StringBuilder("\u672a\u627e\u5230\u52a0\u5bc6\u5668: " + cryptionRaw + "\n\u53ef\u7528\u52a0\u5bc6\u5668:\n");
             for (String cn : ApplicationContext.getAllCryption(payload)) avail.append("  ").append(cn).append("\n");
             return avail.toString();
         }
@@ -962,10 +1414,10 @@ public class McpService implements Plugin {
         sh.setId(UUID.randomUUID().toString());
         sh.setUrl(url); sh.setPassword(password); sh.setSecretKey(secretKey);
         sh.setPayload(payload); sh.setCryption(cryption);
-        sh.setEncoding("UTF-8");
+        sh.setEncoding(safeEncoding((String) a.getOrDefault("encoding", "UTF-8")));
         try {
             Object cryptionObj = ApplicationContext.getCryption(payload, cryption);
-            if (cryptionObj == null) return "未找到加密器: " + cryption;
+            if (cryptionObj == null) return "\u672a\u627e\u5230\u52a0\u5bc6\u5668: " + cryption;
             // Detect if this is a C2 cryption (has 3-arg generate with C2ProfileContext)
             boolean isC2 = false;
             try { cryptionObj.getClass().getMethod("generate", String.class, String.class, C2ProfileContext.class); isC2 = true; } catch (NoSuchMethodException e) {}
@@ -985,7 +1437,7 @@ public class McpService implements Plugin {
                 Object c2ProfileCtx = ctx.getClass().getMethod("getC2ProfileContext").invoke(ctx);
                 java.lang.reflect.Method listTpl = C2ProfileContext.class.getMethod("listC2ProfileTemplate", String.class);
                 java.util.LinkedList<?> templates = (java.util.LinkedList<?>) listTpl.invoke(c2ProfileCtx, payload);
-                if (templates.isEmpty()) return "C2Profile 中没有可用模板";
+                if (templates.isEmpty()) return "C2Profile \u4e2d\u6ca1\u6709\u53ef\u7528\u6a21\u677f";
                 // Pick first template, use "jsp" suffix
                 Class<?> tplClass = (Class<?>) templates.get(0);
                 java.lang.reflect.Constructor<?> ctor = tplClass.getConstructor(C2ProfileContext.class, String.class, String.class, java.util.HashMap.class);
@@ -1004,12 +1456,12 @@ public class McpService implements Plugin {
                 java.lang.reflect.Method gen2 = cryptionObj.getClass().getMethod("generate", String.class, String.class);
                 shellBytes = (byte[]) gen2.invoke(cryptionObj, password, secretKey);
             }
-            if (shellBytes == null || shellBytes.length == 0) return "生成失败: 空文件";
+            if (shellBytes == null || shellBytes.length == 0) return "\u751f\u6210\u5931\u8d25: \u7a7a\u6587\u4ef6";
             java.nio.file.Files.write(java.nio.file.Paths.get(genFile), shellBytes);
-            return "生成成功! 文件: " + genFile + " (" + shellBytes.length + " bytes)"
+            return "\u751f\u6210\u6210\u529f! \u6587\u4ef6: " + genFile + " (" + shellBytes.length + " bytes)"
                 + " | URL: " + url + " | Payload: " + payload + " | Cryption: " + cryption
-                + " | Obfuscation: " + obfLevel + " | C2Profile: " + (c2Profile != null ? c2Profile : "无");
-        } catch (Exception ex) { return "生成失败: " + ex.getMessage(); }
+                + " | Obfuscation: " + obfLevel + " | C2Profile: " + (c2Profile != null ? c2Profile : "\u65e0");
+        } catch (Exception ex) { return "\u751f\u6210\u5931\u8d25: " + ex.getMessage(); }
     }
 
     // --- Export/Import ---
@@ -1166,22 +1618,37 @@ public class McpService implements Plugin {
 
     private String mcpStatus(Map<String, Object> a) {
         int shellCount = Db.getAllShell().size() - 1;
-        return "GSL5 MCP Server\n" +
-            "  \u72b6\u6001: " + (running ? "\u8fd0\u884c\u4e2d" : "\u5df2\u505c\u6b62") + "\n" +
-            "  \u7aef\u53e3: " + port + "\n" +
-            "  \u5730\u5740: http://127.0.0.1:" + port + "\n" +
-            "  SSE \u5ba2\u6237\u7aef: " + sseClients.size() + "\n" +
-            "  Shell \u603b\u6570: " + Math.max(0, shellCount) + "\n" +
-            "  DB \u6a21\u5f0f: " + (core.ui.MainActivity.isRemoteDb ? "\u8fdc\u7a0b PostgreSQL" : "\u672c\u5730 SQLite");
+        StringBuilder sb = new StringBuilder();
+        sb.append("GSL5 MCP Server\n");
+        sb.append("  \u72b6\u6001: ").append(running ? "\u8fd0\u884c\u4e2d" : "\u5df2\u505c\u6b62").append("\n");
+        sb.append("  \u7ed1\u5b9a: ").append(bindHost).append(":").append(port).append("\n");
+        sb.append("  \u63a8\u8350: http://").append(preferredAccessHost()).append(":").append(port).append("/sse\n");
+        sb.append("  \u53ef\u8bbf\u95ee:\n");
+        for (String u : listAccessUrls()) sb.append("    ").append(u).append("/sse\n");
+        sb.append("  SSE \u5ba2\u6237\u7aef: ").append(sseClients.size()).append("\n");
+        sb.append("  Shell \u603b\u6570: ").append(Math.max(0, shellCount)).append("\n");
+        sb.append("  DB \u6a21\u5f0f: ").append(core.ui.MainActivity.isRemoteDb ? "\u8fdc\u7a0b PostgreSQL" : "\u672c\u5730 SQLite");
+        return sb.toString();
     }
 
     private String mcpConfig(Map<String, Object> a) {
-        String json = "{\n" + "  \"mcpServers\": {\n" + "    \"gsl5\": {\n" + "      \"type\": \"sse\",\n" + "      \"url\": \"http://127.0.0.1:" + port + "/sse\"\n" + "    }\n" + "  }\n" + "}";
-        if (a != null && a.containsKey("outputPath")) {
-            try { java.nio.file.Files.write(java.nio.file.Paths.get((String)a.get("outputPath")), json.getBytes(StandardCharsets.UTF_8)); return "\u5df2\u5199\u5165: " + a.get("outputPath"); }
-            catch (Exception e) { return "\u5199\u5165\u5931\u8d25: " + e.getMessage() + "\n\n\u8bf7\u624b\u52a8\u5c06\u4ee5\u4e0b\u5185\u5bb9\u6dfb\u52a0\u5230 Claude \u7684 MCP \u914d\u7f6e\u6587\u4ef6\u4e2d:\n" + json; }
+        String host = preferredAccessHost();
+        if (a != null && a.containsKey("host") && a.get("host") != null) {
+            String h = String.valueOf(a.get("host")).trim();
+            if (!h.isEmpty() && !"auto".equalsIgnoreCase(h)) host = h;
         }
-        return "\u8bf7\u5c06\u4ee5\u4e0b JSON \u6dfb\u52a0\u5230 Claude \u7684 MCP \u914d\u7f6e\u6587\u4ef6\u4e2d:\n\n" + json;
+        String json = buildMcpJson(host);
+        StringBuilder extra = new StringBuilder();
+        extra.append("bind=").append(bindHost).append(":").append(port).append("\n");
+        extra.append("config host=").append(host).append("\n");
+        extra.append("all access URLs:\n");
+        for (String u : listAccessUrls()) extra.append("  ").append(u).append("/sse\n");
+        extra.append("\n");
+        if (a != null && a.containsKey("outputPath")) {
+            try { java.nio.file.Files.write(java.nio.file.Paths.get((String)a.get("outputPath")), json.getBytes(StandardCharsets.UTF_8)); return "\u5df2\u5199\u5165: " + a.get("outputPath") + "\n" + extra + json; }
+            catch (Exception e) { return "\u5199\u5165\u5931\u8d25: " + e.getMessage() + "\n\n" + extra + "\u8bf7\u624b\u52a8\u5c06\u4ee5\u4e0b\u5185\u5bb9\u6dfb\u52a0\u5230 Claude \u7684 MCP \u914d\u7f6e\u6587\u4ef6\u4e2d:\n" + json; }
+        }
+        return extra + "\u8bf7\u5c06\u4ee5\u4e0b JSON \u6dfb\u52a0\u5230 Claude \u7684 MCP \u914d\u7f6e\u6587\u4ef6\u4e2d:\n\n" + json;
     }
     class ConfigHandler implements HttpHandler {
         public void handle(HttpExchange ex) throws IOException {

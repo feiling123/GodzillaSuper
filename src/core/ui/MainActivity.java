@@ -1349,11 +1349,26 @@ public class MainActivity extends JFrame {
     public static void main(String[] args) {
         if (args.length >= 1 && "mcp".equals(args[0])) {
             int p = 9123;
+            String bindHost = "0.0.0.0";
+            // args: mcp [port] [bindHost]
+            // also: mcp 0.0.0.0:9123  or  mcp 192.168.1.10:9123
             if (args.length >= 2) {
-                try {
-                    p = Integer.parseInt(args[1]);
-                } catch (Exception ignored) {
+                String a1 = args[1] == null ? "" : args[1].trim();
+                if (a1.contains(":") && !a1.matches("^\\d+$")) {
+                    int idx = a1.lastIndexOf(':');
+                    bindHost = a1.substring(0, idx);
+                    try { p = Integer.parseInt(a1.substring(idx + 1)); } catch (Exception ignored) {}
+                } else {
+                    try {
+                        p = Integer.parseInt(a1);
+                    } catch (Exception ignored) {
+                        if (!a1.isEmpty()) bindHost = a1;
+                    }
                 }
+            }
+            if (args.length >= 3) {
+                String a2 = args[2] == null ? "" : args[2].trim();
+                if (!a2.isEmpty()) bindHost = a2;
             }
             try {
                 Class.forName("core.ApplicationConfig", true, Thread.currentThread().getContextClassLoader());
@@ -1364,8 +1379,8 @@ public class MainActivity extends JFrame {
             }
             try {
                 Class<?> cls = Class.forName("shells.plugins.generic.McpService");
-                java.lang.reflect.Method m = cls.getMethod("startHeadless", Integer.TYPE);
-                m.invoke(null, p);
+                java.lang.reflect.Method m = cls.getMethod("startHeadless", Integer.TYPE, String.class);
+                m.invoke(null, p, bindHost);
             } catch (Exception e) {
                 Log.error(e);
                 System.exit(1);
