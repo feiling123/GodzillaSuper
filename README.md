@@ -33,7 +33,7 @@
 
 ### 1. 双运行模式
 - **GUI 模式（默认）**：图形化操作界面，启动时可选择数据源（见下表）。
-- **MCP 无头模式**：`java -jar gsl5.jar mcp [port] [bindHost]`，内置 HTTP/SSE 服务，供 Claude Desktop / Claude Code 等 AI 助手远程调用全部功能。默认 **绑定 `0.0.0.0:9123`（全网卡）**，可指定网卡 IP / `127.0.0.1`。
+- **MCP 无头模式**：`java -jar gsl5.jar mcp [port] [bindHost]`，内置 HTTP/SSE 服务，供 **Claude Desktop / Claude Code / Codex** 等 AI 助手远程调用全部功能。默认 **绑定 `0.0.0.0:9123`（全网卡）**，可指定网卡 IP / `127.0.0.1`。
 
 ### 2. 数据源与团队协作
 启动时由 `StartupModeDialog` 选择数据源：
@@ -48,12 +48,13 @@
 - `core/MigrateDb.java`：SQLite → PostgreSQL 一键迁移工具（`java -cp gsl5.jar;lib/postgresql-*.jar core.MigrateDb [host] [port] [db] [user] [pass]`）
 
 ### 3. Shell 全功能管理
-集中管理 **JSP / ASPX / PHP / ASP** 多类 WebShell：
+集中管理 **JSP / ASPX / PHP / ASP / ASP.NET Core** 多类 WebShell：
 
 - **文件管理**（`ShellFileManager`）：浏览目录、上传/下载、删除/复制/移动、改属性、大文件分片续传、从 URL 远程下载到目标
 - **命令执行**（`NewCmd`）：Windows 走 `cmd /c`、Linux 走 `bash`，支持交互终端
 - **数据库工具**：MySQL / Oracle / SQL Server / PostgreSQL / SQLite，执行 SQL、保存常用连接
 - **批量连接测试、搜索、克隆、导入导出**（`gsl5://import?data=...` 链接共享配置）
+- **NetCore 载荷**（`NetCoreDynamicPayload` + `NETCORE_AES_BASE64`）：面向 ASP.NET Core Middleware 的完整动态载荷（文件 / 命令 / SQL / 插件加载）
 
 ### 4. RASP 绕过与字节码多态混淆（RaspBypass 插件）
 - **命令执行绕过**：`Unsafe.allocateInstance` + `forkAndExec`、JNI 原生执行、新线程 / GC finalize、Tomcat-JNI、`ProcessImpl` 直调、反射关闭后执行
@@ -71,7 +72,8 @@
 | `OaTools` | Java / C# | 金蝶 / 致远 / 泛微 / 用友 / Weblogic / vCenter 等专项代理 |
 | `ShellAvscan` | 通用 | 目标安全软件探测 |
 | `RaspBypass` | Java | RASP 绕过 + 内存马（见上） |
-| `McpService` | 通用 | 内置 MCP HTTP/SSE 服务，桥接 AI 助手 |
+| `McpService` | 通用（应用级） | 内置 MCP HTTP/SSE 服务；全局菜单入口，支持 Claude / Codex 一键写配置 |
+| NetCore 插件组 | .NET Core | RealCmd / PortScan / Zip / HttpProxy / EasySocks / EvalCode / ExecuteAssembly / ShellcodeLoader |
 
 ### 6. 现代化 UI 与审计
 - FlatLaf 主题、壁纸管理器、透明度调节
@@ -95,10 +97,13 @@ gsl/
 │   │   └── ui/                         # MainActivity、StartupModeDialog、
 │   │                                   # ShellFileManager、DataView、WallpaperManager 等
 │   ├── shells/
-│   │   ├── payloads/           # 各平台动态载荷（Java / C# 模块）
-│   │   ├── cryptions/          # 流量加密（JavaAes / JavaC2、csharpAes、phpXor、aspXor）
-│   │   └── plugins/            # 增强插件（java / csharp / generic）
-│   │       └── generic/McpService.java # MCP HTTP/SSE 服务（AI 操控入口）
+│   │   ├── payloads/           # 各平台动态载荷（Java / C# / NetCore 模块）
+│   │   │   └── netcore/        # NetCoreShell + payload_core.dll
+│   │   ├── cryptions/          # 流量加密（JavaAes / JavaC2、csharpAes、phpXor、aspXor、NETCORE_AES_BASE64）
+│   │   │   └── netcore/        # Middleware 模板 + AES Base64 加密器
+│   │   └── plugins/            # 增强插件（java / csharp / netcore / generic）
+│   │       ├── generic/McpService.java # MCP HTTP/SSE 服务（AI 操控入口，应用级）
+│   │       └── netcore/        # NetCore 插件 UI + assets/*.dll
 │   ├── util/                   # HTTP、IP 库、工具函数
 │   └── data/                   # 内置资源（av.json、META-INF）
 ├── native/                     # RASP 绕过 JNI 源码（rasp_bypass_jni.c）+ build_jni 脚本
@@ -133,13 +138,13 @@ java -jar bin/gsl5.jar
 
 ### 3. 启动 MCP 无头模式（AI 操控）
 ```bash
-java -jar bin/gsl5.jar mcp                 # 默认 0.0.0.0:9123（全网卡）
-java -jar bin/gsl5.jar mcp 9999            # 自定义端口，仍绑 0.0.0.0
-java -jar bin/gsl5.jar mcp 9123 192.168.1.10   # 只绑指定网卡
-java -jar bin/gsl5.jar mcp 192.168.1.10:9123   # host:port 简写
-java -jar bin/gsl5.jar mcp 9123 127.0.0.1      # 仅本机
+java -jar bin/gsl5.jar mcp                 # 默认 0.0.0.0:9123
+java -jar bin/gsl5.jar mcp 9999            # 自定义端口（仍绑 0.0.0.0）
+java -jar bin/gsl5.jar mcp 9999 127.0.0.1  # 端口 + 绑定地址
+java -jar bin/gsl5.jar mcp 0.0.0.0:9123    # host:port 写法
+java -jar bin/gsl5.jar mcp 192.168.1.10:9123
 ```
-启动日志会打印本机可访问 URL（含网卡 IP）。然后在 Claude 的 MCP 配置中添加（详见 [MCP 服务](#mcp-服务ai-操控)）。
+然后在 Claude / Codex 的 MCP 配置中添加（详见 [MCP 服务](#mcp-服务ai-操控)）。
 
 ### 4. 下载预编译 Release
 - **3.0**：https://github.com/Xaaaa-bip/GodzillaSuper/releases/tag/3.0
@@ -159,9 +164,9 @@ java -jar bin/gsl5.jar mcp 9123 127.0.0.1      # 仅本机
 |------|------|
 | URL | WebShell 地址 |
 | 密码 / 密钥（secretKey） | 通信密钥 |
-| Payload | `JavaDynamicPayload` / `CSharpPayload` / `PhpPayload` 等，需与目标服务端匹配 |
-| 加密（cryption） | `JAVA_AES_BASE64` / `JAVA_C2` / `PHP_XOR` / `CSHARP_AES_BASE64` 等 |
-| 编码（encoding） | 目标控制台编码。MCP 连接时自动从 DB 带入；为空/`auto` 时用 `chcp`/`locale` 自动检测并写回（Windows 多为 GBK，Linux 多为 UTF-8） |
+| Payload | `JavaDynamicPayload` / `CSharpPayload` / `PhpPayload` / `NetCoreDynamicPayload` 等，需与目标服务端匹配 |
+| 加密（cryption） | `JAVA_AES_BASE64` / `JAVA_C2` / `PHP_XOR` / `CSHARP_AES_BASE64` / `NETCORE_AES_BASE64` 等 |
+| 编码（encoding） | 目标控制台编码。MCP 连接时自动从 DB 带入；为空/`auto` 时用 `chcp`/`locale` 自动检测并写回（Windows 多为 GBK，Linux 多为 UTF-8）；也可 `shell_detect_encoding` |
 | 请求头 / 左右标志（reqLeft / reqRight） | 自定义请求体包裹方式 |
 | 代理 / 超时 | `proxyType/Host/Port`、`connTimeout`、`readTimeout` |
 | 备注 / 笔记 | `remark`、`note` |
@@ -196,6 +201,28 @@ java -jar bin/gsl5.jar mcp 9123 127.0.0.1      # 仅本机
 - **Mimikatz** 凭据抓取 ｜ **Useradd** 添加账号 ｜ **ShellAvscan** 探测目标安全软件
 - **OaTools** —— 金蝶 / 致远 / 泛微 / 用友 / Weblogic / vCenter 等专项代理
 
+### NetCore 载荷（ASP.NET Core）
+
+面向 **ASP.NET Core Middleware** 的完整动态载荷（不是传统 aspx）：
+
+| 类型 | 名称 |
+|------|------|
+| Payload | `NetCoreDynamicPayload` |
+| Cryption | `NETCORE_AES_BASE64` |
+| 入口 | ASP.NET Core Middleware（`.cs`） |
+
+**能力**（`payload_core.dll` / 类名 `LY`）：会话 `test`/`close`、基础信息、文件管理、命令执行、SQL（目标进程需已加载对应 DbProviderFactory）、插件 `include` 加载。
+
+**插件**（`src/shells/plugins/netcore/`）：RealCmd / SuperTerminal / PortScan / Zip / HttpProxy / EasySocksProxy / InlineExecuteAssembly / EvalCode / ShellcodeLoader（Windows）。未移植强依赖 System.Web / 域提权的 MemoryShell、Potato 等。
+
+**使用步骤**：
+1. 生成：Payload=`NetCoreDynamicPayload`，加密器=`NETCORE_AES_BASE64`
+2. 将生成的 Middleware 放入 ASP.NET Core 项目：`app.UseMiddleware<GslCoreShellMiddleware>();`
+3. 添加 Shell，密码密钥一致后连接
+4. 打开 Shell 后插件页可见 NetCore 功能
+
+源码说明见 `src/shells/cryptions/netcore/README.md`。
+
 ### 团队协作（PostgreSQL 模式）
 
 启动选 "团队-PostgreSQL" → 多人共享同一 Shell 列表 → 所有操作自动写入审计日志（MCP 可经 `oplog_query` 查询；GUI 经操作审计面板查看）。从单机迁到团队库可用 `MigrateDb` 一键迁移。
@@ -204,28 +231,23 @@ java -jar bin/gsl5.jar mcp 9123 127.0.0.1      # 仅本机
 
 ## MCP 服务（AI 操控）
 
-### 启动与连接
-```bash
-java -jar bin/gsl5.jar mcp [port] [bindHost]
-```
-| 参数 | 默认 | 说明 |
-|------|------|------|
-| `port` | `9123` | HTTP/SSE 端口 |
-| `bindHost` | `0.0.0.0` | 绑定地址：`0.0.0.0`=全网卡，`127.0.0.1`=仅本机，或填网卡 IP |
+### 入口与绑定
+- **GUI**：菜单 **配置 → MCP 服务**（若无配置菜单则 fallback 到插件菜单）。面板约 780×520，支持绑定地址 / 端口 / 启动 / 停止。
+- **CLI**：`java -jar gsl5.jar mcp [port] [bindHost]`，也支持 `host:port` 写法。
+- **默认绑定**：`0.0.0.0:9123`（全网卡）；可改为 `127.0.0.1` 或指定网卡 IP。
+- 启动后日志类似：`[MCP] 服务已启动 bind=0.0.0.0:9123`，并提供可访问 URL 列表。
 
-启动日志示例：
-```text
-[MCP] Headless bind=0.0.0.0:9123
-[MCP] Access URLs:
-  http://127.0.0.1:9123
-  http://192.168.x.x:9123
-[MCP] Recommended SSE: http://192.168.x.x:9123/sse
-```
+### 一键写入 Claude / Codex 配置
+GUI 面板第二行：
+| 按钮 | 写入目标 |
+|------|----------|
+| **写入全部配置** | Claude Code + Claude Desktop + Codex |
+| **写入 Claude** | `~/.claude/mcp.json`、项目 `mcp.json` / `.mcp.json`、Claude Desktop `claude_desktop_config.json` |
+| **写入 Codex** | `~/.codex/config.toml` → `[mcp_servers.gsl5]` |
 
-- SSE 的 `event: endpoint` **跟随请求 Host**，用网卡 IP 访问时，后续 `/message` 也会指向该 IP（不再写死 127.0.0.1）。
-- GUI 中 `McpService` 面板可填「绑定」地址；「写入配置」会按推荐网卡 IP 生成 `mcp.json`。
+也可经 MCP 工具 `mcp_config`：`client=claude|codex|all`，`write=true`，可选 `host` / `outputPath`。
 
-在 Claude Desktop / Claude Code 的 MCP 配置（`~/.claude/mcp.json`）中添加（本机示例；跨机把 IP 换成网卡地址）：
+### Claude 配置示例
 ```json
 {
   "mcpServers": {
@@ -237,56 +259,71 @@ java -jar bin/gsl5.jar mcp [port] [bindHost]
 }
 ```
 
-### Encoding 自动检测
-连接 Shell 时（`shell_exec` / `shell_info` / `file_*` 等）：
-1. **先从数据库读取** `encoding` 并带入会话
-2. DB 为空或参数 `encoding=auto` → 用 `chcp`（Windows）/ `locale charmap`（Linux）检测，必要时多候选评分，结果写回 DB
-3. DB 已有值 → 冷连接时做一次轻量 `chcp`/`locale` 校验，冲突则纠正并写回
-4. 参数显式 `encoding=GBK`/`UTF-8` 等 → 强制使用，不检测
-5. 会话缓存命中不重检；强制重检用 `encoding=auto` 或 `shell_detect_encoding`
+### Codex 配置示例
+```toml
+[mcp_servers.gsl5]
+type = "sse"
+url = "http://127.0.0.1:9123/sse"
+```
 
-### 可用工具（以源码 `McpService.java` 为准，约 45+）
+### Encoding 自检
+连接 / 执行时自动处理远程控制台编码：
+1. 显式 `encoding` 参数 → 强制使用
+2. `auto` 或 DB 为空 → 探测（`chcp` / `locale`）并写回 DB
+3. DB 已有值 → 使用 DB 值，并做冷连接校验
+4. 缓存命中不重复探测（`auto` / `shell_detect_encoding`）
+
+可用工具 `shell_detect_encoding` 主动探测并写回。
+
+### 可用工具（以源码 `McpService.java` 为准）
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
 | **Shell 管理** | `shell_list` | 列出所有 Shell（可按分组过滤） |
 | | `shell_get` | 获取单个 Shell 完整配置 |
-| | `shell_add` / `shell_edit` / `shell_delete` | 增 / 改 / 删（edit 后清连接缓存） |
+| | `shell_add` / `shell_edit` / `shell_delete` | 增 / 改 / 删 Shell |
 | | `shell_clone` | 克隆 Shell |
 | | `shell_backup` | 备份 Shell 列表 |
 | **查询 / 批量** | `shell_count` | 按分组统计 |
 | | `shell_search` | 关键词搜索 |
-| | `shell_batch_test` | 批量测试连接（走统一 init + encoding） |
-| **远程探测** | `shell_info` | 远程系统信息（首行带当前 encoding） |
-| | `shell_test` | 测试连接（返回 encoding=） |
-| | `shell_detect_encoding` | **自动检测**控制台编码并可选写回 DB |
-| | `process_list` / `net_info` | 进程 / 网络 |
-| **命令执行** | `shell_exec` | 执行命令；可选 `encoding` / `os` |
-| **文件操作** | `file_list` | 列目录（原生 API） |
-| | `file_read` | 读小文件（**按 Shell encoding 解码**，>512KB 提示用 download） |
-| | `file_search` / `file_roots` | 搜索 / 根目录 |
-| | `file_upload_local` / `file_download_local` | 本地↔远程直传（服务端读写，不经 AI） |
+| | `shell_batch_test` | 批量测试连接 |
+| **远程探测** | `shell_info` | 远程系统信息（OS / 用户 / 目录） |
+| | `shell_test` | 测试单条连接 |
+| | `shell_detect_encoding` | 探测远程控制台编码并写回 DB |
+| | `process_list` | 列出进程 |
+| | `net_info` | 网络连接信息 |
+| **命令执行** | `shell_exec` | 执行系统命令（`encoding` 支持 GBK/UTF-8/`auto`） |
+| **文件操作** | `file_list` | 列目录 |
+| | `file_read` | 读文件（自动判断文本 / 二进制） |
+| | `file_search` / `file_roots` | 按名搜索 / 列文件系统根目录 |
+| | `file_upload_local` / `file_download_local` | 本机路径直传 / 直存（不经 AI 中转） |
 | | `file_delete` / `file_copy` / `file_move` | 删 / 复制 / 移动 |
-| | `file_mkdir` / `file_attr` / `file_remote_down` | 建目录 / 属性 / URL 拉到目标 |
-| **数据库** | `db_exec` / `db_list_types` / `db_configs` | SQL 与连接配置 |
-| **Payload / 生成** | `payload_list` / `shell_create` | 载荷列表 / 生成文件（模糊匹配加密器，绕过 C2 UI） |
-| | `c2profile_list` / `c2profile_get` | C2 模板 |
-| **环境 / 导入导出** | `shell_env` / `shell_export` / `shell_import` | 环境变量 / `gsl5://` 链接 |
-| **设置 / 配置** | `settings_*` / `config_*` | 应用设置 / `config.yaml` |
-| **MCP 管理** | `mcp_status` | 绑定地址 + 全部可访问 URL |
-| | `mcp_config` | 生成 MCP JSON（可选 `host`） |
-| **审计** | `oplog_query` | 团队操作日志 |
+| | `file_mkdir` / `file_attr` | 建目录 / 设属性（权限 / 时间戳） |
+| | `file_remote_down` | 从 URL 远程下载到目标 |
+| **数据库** | `db_exec` | 执行 SQL |
+| | `db_list_types` / `db_configs` | 列支持的库类型 / 管理连接配置 |
+| **Payload / 生成** | `payload_list` | 列出所有载荷与加密器（含 NetCore） |
+| | `shell_create` | 生成 Shell 文件（可指定 `cryption`、`genFile`、`c2Profile`、`obfuscation`） |
+| | `c2profile_list` / `c2profile_get` | 列出 / 获取 C2 配置 |
+| **环境** | `shell_env` | 读取 / 设置 Shell 环境变量 |
+| **导入导出** | `shell_export` / `shell_import` | 导出 / 导入（`gsl5://` 链接） |
+| **设置** | `settings_get` / `settings_set` | 读 / 改应用设置 |
+| **配置** | `config_read` / `config_write` | 读 / 写 `config.yaml` |
+| **MCP 管理** | `mcp_status` | 服务状态（绑定地址 / 可访问 URL） |
+| | `mcp_config` | 生成 / 写入 Claude 或 Codex 配置（`client`/`write`/`host`） |
+| **审计** | `oplog_query` | 查询团队操作日志 |
 
-> `shell_create` 的 `obfuscation` 默认 `default`；其它值会写入 `godMode`。C2 可指定 `c2Profile` 避免弹 UI。
+> `shell_create` 的 `obfuscation` 参数默认 `default`（不启用增强）；传其它值会写入 `godMode` 设置，启用增强传输模式。C2 模板可通过 `c2profile_list` 查询，指定 `c2Profile` 参数可避免弹 UI 选择框。
 
 ### 典型工作流
 ```
-1. 启动 GSL5 MCP（0.0.0.0:9123 或指定网卡）
-2. Claude 连接 SSE（本机 127.0.0.1 或网卡 IP）
-3. shell_list / shell_test
-4. shell_detect_encoding  # 可选：确认/纠正目标编码
-5. shell_exec / file_list / file_read
-6. db_exec / oplog_query
+1. 启动 GSL5 MCP 服务（GUI 面板或 mcp 无头）
+2. 写入 Claude / Codex 配置并连接 SSE
+3. shell_list / shell_detect_encoding → 查看 Shell 并校正编码
+4. shell_exec          → 在目标执行命令
+5. file_list/file_read → 浏览、读取文件
+6. db_exec             → 查询数据库
+7. oplog_query         → 回溯操作审计
 ```
 
 ---
@@ -322,7 +359,7 @@ database:                 # 团队 PostgreSQL（仅团队模式使用）
 
 ## 编译与构建
 
-> ⚠️ 多数源码为 **GBK**；`McpService.java` 为**纯 ASCII**（中文用 `\uXXXX`），请用 `javac -encoding UTF-8` 编译。编辑 GBK 文件时避免被工具改成 UTF-8 破坏字节。
+> ⚠️ 源码默认 **GBK** 编码（`McpService.java` 为 UTF-8）。编辑 GBK 文件时避免用会重编码为 UTF-8 的工具，纯 ASCII 改动建议用 `sed`。
 
 ```bash
 # 1) 编译核心源码（GBK）
@@ -359,13 +396,16 @@ jar uf out/artifacts/gsl5_jar/gsl5.jar shells/plugins/generic/McpService.class
 A：确保 `license.lic` 在运行目录且未过期；用 `KeyGen.java` 重新生成。
 
 **Q：MCP 连接失败？**
-A：检查端口（默认 9123）是否被占用、防火墙是否放行；跨机访问需绑定 `0.0.0.0` 或网卡 IP，Claude 配置的 SSE URL 要用**实际访问的 IP**（不是写死的 127.0.0.1）。用 `mcp_status` 查看全部可访问地址。
+A：检查绑定地址与端口（默认 `0.0.0.0:9123`）是否被占用、防火墙是否放行；确认 Claude / Codex 配置的 URL 与实际可访问地址一致。本机客户端可用 `127.0.0.1`，跨机需写网卡 IP 并用 `mcp_config`/`写入配置` 生成对应 URL。
 
 **Q：Shell 连接超时？**
 A：检查目标 URL 是否可达，Payload / 加密方式是否与目标服务端匹配。
 
 **Q：中文乱码？**
-A：先看 Shell 的 `encoding`（GUI 配置或 `shell_get`）。MCP 会自动从 DB 带入；不对时用 `shell_detect_encoding` 或 `shell_exec ... encoding=auto` 重检。Windows 控制台多为 GBK，Linux 多为 UTF-8。`file_read` 按 Shell 控制台编码解码文本。
+A：目标输出默认 GBK（Windows）/ UTF-8（Linux），可在 Shell 配置中设置 `encoding`，或用 MCP `shell_detect_encoding` / `encoding=auto` 自动探测写回。
+
+**Q：NetCore 载荷怎么用？**
+A：生成时选 `NetCoreDynamicPayload` + `NETCORE_AES_BASE64`，把 Middleware `.cs` 挂进 ASP.NET Core 管道（`UseMiddleware`），不是上传 aspx。纯文件上传默认不能当 aspx 用。
 
 **Q：团队模式连不上数据库？**
 A：PostgreSQL 需允许远程连接（`pg_hba.conf`），确认用户名密码正确；先用 `StartupModeDialog` 的 Test Connection 验证。

@@ -1253,23 +1253,33 @@ public class MainActivity extends JFrame {
             mcpItem.addActionListener(e -> {
                 try {
                     Class<?> mcpClass = Class.forName("shells.plugins.generic.McpService");
-                    Object mcp = mcpClass.newInstance();
+                    Object mcp = mcpClass.getDeclaredConstructor().newInstance();
                     java.awt.Container view = (java.awt.Container) mcpClass.getMethod("getView").invoke(mcp);
                     JFrame frame = new JFrame("MCP \u670d\u52a1\u63a7\u5236\u9762\u677f");
                     frame.setContentPane(view);
-                    frame.setSize(500, 400);
+                    frame.setSize(780, 520);
+                    frame.setMinimumSize(new java.awt.Dimension(640, 420));
                     frame.setLocationRelativeTo(MainActivity.this);
                     frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
                     frame.setVisible(true);
                 } catch (Exception ex) {
                     Log.error(ex);
+                    try {
+                        javax.swing.JOptionPane.showMessageDialog(MainActivity.this,
+                                "MCP \u9762\u677f\u6253\u5f00\u5931\u8d25: " + ex.getMessage(),
+                                "MCP", javax.swing.JOptionPane.ERROR_MESSAGE);
+                    } catch (Exception ignored2) {}
                 }
             });
-            pluginMenu.add(mcpItem);
-        } catch (Exception ignored) {
+            if (this.configMenu != null) {
+                this.configMenu.add(mcpItem);
+            } else {
+                pluginMenu.add(mcpItem);
+            }
+        } catch (Exception ex) {
+            Log.error(ex);
         }
     }
-
     public static void registerPluginPopMenu(PopupMenu popupMenu) {
         pluginMenu.add(popupMenu);
     }

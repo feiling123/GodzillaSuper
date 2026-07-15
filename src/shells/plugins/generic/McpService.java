@@ -8,7 +8,6 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import core.ApplicationContext;
 import core.Db;
-import core.annotation.PluginAnnotation;
 import core.imp.Payload;
 import core.imp.Plugin;
 import core.shell.ShellEntity;
@@ -17,6 +16,7 @@ import core.ui.component.model.DbInfo;
 import java.awt.BorderLayout;
 import java.awt.event.ActionEvent;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -31,6 +31,7 @@ import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
+import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -46,11 +47,8 @@ import util.Log;
 import util.automaticBindClick;
 import util.functions;
 
-@PluginAnnotation(
-    payloadName = "JavaDynamicPayload",
-    Name = "McpService",
-    DisplayName = "MCP \u670d\u52a1"
-)
+// MCP is app-global (menu / CLI). Do NOT register as a payload Plugin,
+// otherwise it only shows up under JavaDynamicPayload shell plugins.
 public class McpService implements Plugin {
 
     private static final int DEFAULT_PORT = 9123;
@@ -73,38 +71,76 @@ public class McpService implements Plugin {
     private JTextArea logArea;
     private JLabel statusLabel;
     private JButton writeConfigBtn;
+    private JButton writeClaudeBtn;
+    private JButton writeCodexBtn;
 
     public McpService() {
         panel = new JPanel(new BorderLayout(6, 6));
-        JPanel topPanel = new JPanel();
-        topPanel.add(new JLabel("\u7ed1\u5b9a:"));
+
+        // Row 1: bind + port + start/stop
+        JPanel row1 = new JPanel();
+        row1.add(new JLabel("\u7ed1\u5b9a:"));
         hostField = new JTextField(DEFAULT_BIND, 12);
         hostField.setToolTipText("0.0.0.0=\u5168\u7f51\u5361  127.0.0.1=\u4ec5\u672c\u673a  \u6216\u586b\u7f51\u5361IP");
-        topPanel.add(hostField);
-        topPanel.add(new JLabel("\u7aef\u53e3:"));
+        row1.add(hostField);
+        row1.add(new JLabel("\u7aef\u53e3:"));
         portField = new JTextField(String.valueOf(DEFAULT_PORT), 6);
-        topPanel.add(portField);
+        row1.add(portField);
         startBtn = new JButton("\u542f\u52a8\u670d\u52a1");
         stopBtn = new JButton("\u505c\u6b62\u670d\u52a1");
         stopBtn.setEnabled(false);
-        topPanel.add(startBtn);
-        topPanel.add(stopBtn);
-        writeConfigBtn = new JButton("\u5199\u5165\u914d\u7f6e");
-        topPanel.add(writeConfigBtn);
+        row1.add(startBtn);
+        row1.add(stopBtn);
         statusLabel = new JLabel("\u72b6\u6001: \u5df2\u505c\u6b62");
-        topPanel.add(statusLabel);
+        row1.add(statusLabel);
+
+        // Row 2: Claude / Codex writers
+        JPanel row2 = new JPanel();
+        writeConfigBtn = new JButton("\u5199\u5165\u5168\u90e8\u914d\u7f6e");
+        writeConfigBtn.setToolTipText("Claude Code + Claude Desktop + Codex");
+        row2.add(writeConfigBtn);
+        writeClaudeBtn = new JButton("\u5199\u5165 Claude");
+        writeClaudeBtn.setToolTipText("~/.claude/mcp.json + Desktop claude_desktop_config.json");
+        row2.add(writeClaudeBtn);
+        writeCodexBtn = new JButton("\u5199\u5165 Codex");
+        writeCodexBtn.setToolTipText("~/.codex/config.toml [mcp_servers.gsl5]");
+        row2.add(writeCodexBtn);
+
+        JPanel topPanel = new JPanel();
+        topPanel.setLayout(new BoxLayout(topPanel, BoxLayout.Y_AXIS));
+        row1.setAlignmentX(0.0f);
+        row2.setAlignmentX(0.0f);
+        topPanel.add(row1);
+        topPanel.add(row2);
         panel.add(topPanel, BorderLayout.NORTH);
+
         logArea = new JTextArea();
         logArea.setEditable(false);
         panel.add(new JScrollPane(logArea), BorderLayout.CENTER);
         automaticBindClick.bindJButtonClick(this, this);
+        refreshUiState();
     }
-
-    public void init(ShellEntity shellEntity) {}
-    public JPanel getView() { return panel; }
-    public void writeConfigBtnClick(ActionEvent e) { writeClaudeConfig(); }
+    public void init(ShellEntity shellEntity) { refreshUiState(); }
+    public JPanel getView() { refreshUiState(); return panel; }
+    public void writeConfigBtnClick(ActionEvent e) { writeAllClientConfigs(); }
+    public void writeClaudeBtnClick(ActionEvent e) { writeClaudeConfigOnly(); }
+    public void writeCodexBtnClick(ActionEvent e) { writeCodexConfigOnly(); }
     public void startBtnClick(ActionEvent e) { startMcpServer(); }
     public void stopBtnClick(ActionEvent e) { stopMcpServer(); }
+
+    private void refreshUiState() {
+        try {
+            if (startBtn != null) startBtn.setEnabled(!running);
+            if (stopBtn != null) stopBtn.setEnabled(running);
+            if (statusLabel != null) {
+                statusLabel.setText(running
+                        ? ("\u72b6\u6001: \u8fd0\u884c\u4e2d (" + bindHost + ":" + port + ")")
+                        : "\u72b6\u6001: \u5df2\u505c\u6b62");
+            }
+            if (portField != null && !running) portField.setText(String.valueOf(port > 0 ? port : DEFAULT_PORT));
+            if (hostField != null && !running && bindHost != null) hostField.setText(bindHost);
+        } catch (Exception ignored) {}
+    }
 
     private void startMcpServer() {
         if (running) return;
@@ -119,10 +155,8 @@ public class McpService implements Plugin {
             server.createContext("/config", new ConfigHandler());
             server.start();
             running = true;
-            startBtn.setEnabled(false);
-            stopBtn.setEnabled(true);
+            refreshUiState();
             String primary = preferredAccessHost();
-            statusLabel.setText("\u72b6\u6001: \u8fd0\u884c\u4e2d (" + bindHost + ":" + port + ")");
             log("[MCP] \u670d\u52a1\u5df2\u542f\u52a8 bind=" + bindHost + ":" + port);
             log("[MCP] \u8bbf\u95ee\u5730\u5740:");
             for (String u : listAccessUrls()) log("  " + u);
@@ -130,10 +164,38 @@ public class McpService implements Plugin {
         } catch (Exception e) {
             log("[MCP] \u542f\u52a8\u5931\u8d25: " + e.getMessage());
             GOptionPane.showMessageDialog(panel, "\u542f\u52a8\u5931\u8d25: " + e.getMessage(), "\u9519\u8bef", 2);
+            refreshUiState();
         }
     }
 
-        private void writeClaudeConfig() {
+        private void writeAllClientConfigs() {
+        StringBuilder msg = new StringBuilder();
+        msg.append(doWriteClaudeConfigs(true));
+        msg.append("\n");
+        msg.append(doWriteCodexConfig(true));
+        msg.append("\n--- Claude JSON ---\n").append(buildMcpJson(preferredAccessHost()));
+        msg.append("\n--- Codex TOML ---\n").append(buildCodexToml(preferredAccessHost()));
+        GOptionPane.showMessageDialog(panel, msg.toString(), "MCP Config (Claude + Codex)", 1);
+    }
+
+    private void writeClaudeConfigOnly() {
+        StringBuilder msg = new StringBuilder();
+        msg.append(doWriteClaudeConfigs(true));
+        msg.append("\n").append(buildMcpJson(preferredAccessHost()));
+        GOptionPane.showMessageDialog(panel, msg.toString(), "MCP Config (Claude)", 1);
+    }
+
+    private void writeCodexConfigOnly() {
+        StringBuilder msg = new StringBuilder();
+        msg.append(doWriteCodexConfig(true));
+        msg.append("\n").append(buildCodexToml(preferredAccessHost()));
+        GOptionPane.showMessageDialog(panel, msg.toString(), "MCP Config (Codex)", 1);
+    }
+
+    /** Keep old name for any leftover callers. */
+    private void writeClaudeConfig() { writeAllClientConfigs(); }
+
+    private String doWriteClaudeConfigs(boolean logIt) {
         String host = preferredAccessHost();
         String json = buildMcpJson(host);
         StringBuilder msg = new StringBuilder();
@@ -141,47 +203,239 @@ public class McpService implements Plugin {
         msg.append("access URLs:\n");
         for (String u : listAccessUrls()) msg.append("  ").append(u).append("\n");
         msg.append("config host: ").append(host).append("\n\n");
-        // 1. Write to ~/.claude/mcp.json
-        String claudePath = System.getProperty("user.home") + "/.claude/mcp.json";
+
+        // 1) Claude Code: ~/.claude/mcp.json
+        String home = System.getProperty("user.home");
+        String claudeDir = home + File.separator + ".claude";
+        String claudePath = claudeDir + File.separator + "mcp.json";
         try {
-            java.nio.file.Files.createDirectories(java.nio.file.Paths.get(System.getProperty("user.home") + "/.claude"));
-            java.nio.file.Files.write(java.nio.file.Paths.get(claudePath), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            msg.append("mcp.json: ").append(claudePath).append("\n");
-            log("[MCP] Config written: " + claudePath);
-        } catch (Exception ex) { msg.append("Failed: ").append(ex.getMessage()).append("\n"); }
-        // 2. Write local mcp.json
+            Files.createDirectories(Paths.get(claudeDir));
+            // merge into existing mcpServers if present
+            String merged = mergeClaudeMcpJson(claudePath, json);
+            Files.write(Paths.get(claudePath), merged.getBytes(StandardCharsets.UTF_8));
+            msg.append("[OK] Claude Code mcp.json: ").append(claudePath).append("\n");
+            if (logIt) log("[MCP] Claude mcp.json: " + claudePath);
+        } catch (Exception ex) {
+            msg.append("[FAIL] Claude mcp.json: ").append(ex.getMessage()).append("\n");
+        }
+
+        // 2) Project discovery: cwd/mcp.json and cwd/.mcp.json
         try {
-            java.nio.file.Files.write(java.nio.file.Paths.get("mcp.json"), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            msg.append("Local: mcp.json\n");
-            // Also write to project root .mcp.json for Claude Code auto-discovery
-            try { java.nio.file.Files.write(java.nio.file.Paths.get(System.getProperty("user.dir") + "/.mcp.json"), json.getBytes(java.nio.charset.StandardCharsets.UTF_8)); msg.append("Project: .mcp.json\n"); } catch (Exception ex2) {}
-        } catch (Exception ex) {}
-        // 3. Update settings.json to approve gsl5
-        String settingsPath = System.getProperty("user.home") + "/.claude/settings.json";
+            Files.write(Paths.get("mcp.json"), json.getBytes(StandardCharsets.UTF_8));
+            msg.append("[OK] Local: mcp.json\n");
+        } catch (Exception ex) {
+            msg.append("[FAIL] Local mcp.json: ").append(ex.getMessage()).append("\n");
+        }
+        try {
+            Files.write(Paths.get(System.getProperty("user.dir") + File.separator + ".mcp.json"), json.getBytes(StandardCharsets.UTF_8));
+            msg.append("[OK] Project: .mcp.json\n");
+        } catch (Exception ex) {
+            msg.append("[FAIL] Project .mcp.json: ").append(ex.getMessage()).append("\n");
+        }
+
+        // 3) Claude Desktop: %APPDATA%/Claude/claude_desktop_config.json (Win) or ~/Library/... (mac)
+        String desktopPath = resolveClaudeDesktopConfigPath();
+        if (desktopPath != null) {
+            try {
+                java.io.File df = new java.io.File(desktopPath);
+                if (df.getParentFile() != null) df.getParentFile().mkdirs();
+                String mergedDesktop = mergeClaudeMcpJson(desktopPath, json);
+                Files.write(Paths.get(desktopPath), mergedDesktop.getBytes(StandardCharsets.UTF_8));
+                msg.append("[OK] Claude Desktop: ").append(desktopPath).append("\n");
+                if (logIt) log("[MCP] Claude Desktop: " + desktopPath);
+            } catch (Exception ex) {
+                msg.append("[FAIL] Claude Desktop: ").append(ex.getMessage()).append("\n");
+            }
+        } else {
+            msg.append("[SKIP] Claude Desktop path not found\n");
+        }
+
+        // 4) Approve project MCP server name in ~/.claude/settings.json
+        String settingsPath = claudeDir + File.separator + "settings.json";
         try {
             java.io.File sf = new java.io.File(settingsPath);
-            String settingsContent = sf.exists() ? new String(java.nio.file.Files.readAllBytes(sf.toPath()), StandardCharsets.UTF_8) : "{}";
+            String settingsContent = sf.exists()
+                    ? new String(Files.readAllBytes(sf.toPath()), StandardCharsets.UTF_8) : "{}";
             if (!settingsContent.contains("\"gsl5\"")) {
                 if (settingsContent.contains("\"enabledMcpjsonServers\"")) {
-                    settingsContent = settingsContent.replaceFirst("(\"enabledMcpjsonServers\"\\s*:\\s*\\[)", "$1\"gsl5\", ");
-                } else {
-                    settingsContent = settingsContent.replace("}", ",\n  \"enableAllProjectMcpServers\": true,\n  \"enabledMcpjsonServers\": [\"gsl5\"]\n}");
+                    settingsContent = settingsContent.replaceFirst(
+                            "(\"enabledMcpjsonServers\"\\s*:\\s*\\[)", "$1\"gsl5\", ");
+                } else if (settingsContent.trim().endsWith("}")) {
+                    String trim = settingsContent.trim();
+                    String insert = (trim.length() > 2 && !trim.equals("{}") ? "," : "")
+                            + "\n  \"enableAllProjectMcpServers\": true,\n  \"enabledMcpjsonServers\": [\"gsl5\"]\n";
+                    settingsContent = trim.substring(0, trim.length() - 1) + insert + "}";
                 }
-                java.nio.file.Files.write(sf.toPath(), settingsContent.getBytes(StandardCharsets.UTF_8));
-                msg.append("settings.json: approved gsl5\n");
-                log("[MCP] settings.json updated");
+                Files.write(sf.toPath(), settingsContent.getBytes(StandardCharsets.UTF_8));
+                msg.append("[OK] settings.json approved gsl5\n");
+                if (logIt) log("[MCP] settings.json updated");
+            } else {
+                msg.append("[OK] settings.json already has gsl5\n");
             }
-        } catch (Exception ex) {}
-        GOptionPane.showMessageDialog(panel, msg.toString() + "\n" + json, "MCP Config", 1);
+        } catch (Exception ex) {
+            msg.append("[FAIL] settings.json: ").append(ex.getMessage()).append("\n");
+        }
+        return msg.toString();
+    }
+
+    private String doWriteCodexConfig(boolean logIt) {
+        String host = preferredAccessHost();
+        StringBuilder msg = new StringBuilder();
+        String home = System.getProperty("user.home");
+        String codexDir = home + File.separator + ".codex";
+        String codexPath = codexDir + File.separator + "config.toml";
+        try {
+            Files.createDirectories(Paths.get(codexDir));
+            String existing = "";
+            java.io.File cf = new java.io.File(codexPath);
+            if (cf.exists()) {
+                existing = new String(Files.readAllBytes(cf.toPath()), StandardCharsets.UTF_8);
+            }
+            String updated = upsertCodexMcpServer(existing, host, port);
+            Files.write(Paths.get(codexPath), updated.getBytes(StandardCharsets.UTF_8));
+            msg.append("[OK] Codex config.toml: ").append(codexPath).append("\n");
+            msg.append("     [mcp_servers.gsl5] url=http://").append(host).append(":").append(port).append("/sse\n");
+            if (logIt) log("[MCP] Codex config.toml: " + codexPath);
+        } catch (Exception ex) {
+            msg.append("[FAIL] Codex config.toml: ").append(ex.getMessage()).append("\n");
+        }
+        return msg.toString();
+    }
+
+    private static String resolveClaudeDesktopConfigPath() {
+        String os = System.getProperty("os.name", "").toLowerCase();
+        String home = System.getProperty("user.home");
+        if (os.contains("win")) {
+            String appData = System.getenv("APPDATA");
+            if (appData == null || appData.isEmpty()) appData = home + File.separator + "AppData" + File.separator + "Roaming";
+            return appData + File.separator + "Claude" + File.separator + "claude_desktop_config.json";
+        }
+        if (os.contains("mac")) {
+            return home + File.separator + "Library" + File.separator + "Application Support"
+                    + File.separator + "Claude" + File.separator + "claude_desktop_config.json";
+        }
+        // Linux
+        return home + File.separator + ".config" + File.separator + "Claude" + File.separator + "claude_desktop_config.json";
+    }
+
+    /**
+     * Merge gsl5 server into existing Claude-style { "mcpServers": { ... } } JSON.
+     * If parse fails, overwrite with the new minimal document.
+     */
+    private static String mergeClaudeMcpJson(String path, String newDoc) {
+        try {
+            java.io.File f = new java.io.File(path);
+            if (!f.exists()) return newDoc;
+            String old = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+            if (old == null || old.trim().isEmpty()) return newDoc;
+            // If already has gsl5 url block, replace that server entry; else insert.
+            if (old.contains("\"gsl5\"")) {
+                // replace "gsl5": { ... } non-greedy-ish via simple strategy: rebuild using newDoc's gsl5 block
+                String gsl5Block = extractGsl5ServerBlock(newDoc);
+                if (gsl5Block == null) return newDoc;
+                String replaced = old.replaceAll(
+                        "\"gsl5\"\\s*:\\s*\\{[^}]*\\}",
+                        gsl5Block.replace("\\", "\\\\").replace("$", "\\$"));
+                // if regex failed to change, fall through
+                if (!replaced.equals(old)) return replaced;
+            }
+            // insert into mcpServers
+            int idx = old.indexOf("\"mcpServers\"");
+            if (idx >= 0) {
+                int brace = old.indexOf('{', idx);
+                if (brace > 0) {
+                    String gsl5Block = extractGsl5ServerBlock(newDoc);
+                    if (gsl5Block == null) return newDoc;
+                    // after '{' of mcpServers
+                    String after = old.substring(brace + 1).trim();
+                    boolean empty = after.startsWith("}");
+                    String insert = "\n    " + gsl5Block + (empty ? "\n  " : ",\n");
+                    return old.substring(0, brace + 1) + insert + old.substring(brace + 1);
+                }
+            }
+            return newDoc;
+        } catch (Exception e) {
+            return newDoc;
+        }
+    }
+
+    private static String extractGsl5ServerBlock(String json) {
+        // returns: "gsl5": { "type": "sse", "url": "..." }
+        int i = json.indexOf("\"gsl5\"");
+        if (i < 0) return null;
+        int start = i;
+        int brace = json.indexOf('{', i);
+        if (brace < 0) return null;
+        int depth = 0;
+        for (int p = brace; p < json.length(); p++) {
+            char c = json.charAt(p);
+            if (c == '{') depth++;
+            else if (c == '}') {
+                depth--;
+                if (depth == 0) return json.substring(start, p + 1).trim();
+            }
+        }
+        return null;
+    }
+
+    private static String buildCodexToml(String host) {
+        if (host == null || host.isEmpty()) host = preferredAccessHost();
+        return "[mcp_servers.gsl5]\n"
+                + "type = \"sse\"\n"
+                + "url = \"http://" + host + ":" + port + "/sse\"\n";
+    }
+
+    /**
+     * Upsert [mcp_servers.gsl5] (and ensure [mcp_servers] exists) in Codex config.toml.
+     */
+    private static String upsertCodexMcpServer(String existing, String host, int p) {
+        if (existing == null) existing = "";
+        String block = "[mcp_servers.gsl5]\n"
+                + "type = \"sse\"\n"
+                + "url = \"http://" + host + ":" + p + "/sse\"\n";
+        // remove previous [mcp_servers.gsl5] section if present
+        String cleaned = removeTomlTable(existing, "mcp_servers.gsl5");
+        cleaned = cleaned.replaceAll("\n{3,}", "\n\n").trim();
+        StringBuilder out = new StringBuilder();
+        if (!cleaned.isEmpty()) {
+            out.append(cleaned);
+            if (!cleaned.endsWith("\n")) out.append("\n");
+            out.append("\n");
+        }
+        // ensure parent table marker exists for readability (optional)
+        if (!cleaned.contains("[mcp_servers]") && !cleaned.contains("[mcp_servers.")) {
+            // Codex accepts [mcp_servers.name] without bare [mcp_servers]
+        }
+        out.append(block);
+        if (!out.toString().endsWith("\n")) out.append("\n");
+        return out.toString();
+    }
+
+    private static String removeTomlTable(String toml, String tableName) {
+        if (toml == null || toml.isEmpty()) return "";
+        String header = "[" + tableName + "]";
+        int start = toml.indexOf(header);
+        if (start < 0) return toml;
+        // find next table header after start
+        int searchFrom = start + header.length();
+        int next = -1;
+        for (int i = searchFrom; i < toml.length(); i++) {
+            if (toml.charAt(i) == '\n' && i + 1 < toml.length() && toml.charAt(i + 1) == '[') {
+                next = i + 1;
+                break;
+            }
+        }
+        String before = toml.substring(0, start);
+        String after = next >= 0 ? toml.substring(next) : "";
+        return before + after;
     }
 
     private void stopMcpServer() {
         if (!running || server == null) return;
         server.stop(0);
+        server = null;
         running = false;
-        startBtn.setEnabled(true);
-        stopBtn.setEnabled(false);
-        statusLabel.setText("\u72b6\u6001: \u5df2\u505c\u6b62");
+        refreshUiState();
         log("[MCP] \u670d\u52a1\u5df2\u505c\u6b62");
     }
 
@@ -470,7 +724,7 @@ public class McpService implements Plugin {
         sb.append(",").append(t("settings_set","\u4fee\u6539\u5e94\u7528\u8bbe\u7f6e", p("key",s("\u5fc5\u586b"),"value",s("\u5fc5\u586b"))));
                 sb.append(",").append(t("config_read","\u8bfb\u53d6 config.yaml", p()));
         sb.append(",").append(t("config_write","\u5199\u5165 config.yaml", p("content",s("\u5185\u5bb9"))));
-        sb.append(",").append(t("mcp_config","\u751f\u6210 Claude MCP \u914d\u7f6e", p("outputPath",s("\u53ef\u9009"),"host",s("\u53ef\u9009,\u7f51\u5361IP/\u57df\u540d,auto=\u81ea\u52a8"))));
+        sb.append(",").append(t("mcp_config","\u751f\u6210/\u5199\u5165 Claude \u6216 Codex \u7684 MCP \u914d\u7f6e", p("client",s("\u53ef\u9009:claude|codex|all,\u9ed8\u8ba4claude"),"outputPath",s("\u53ef\u9009,\u5199\u51fa\u6587\u4ef6\u8def\u5f84"),"host",s("\u53ef\u9009,\u7f51\u5361IP/\u57df\u540d,auto=\u81ea\u52a8"),"write",s("\u53ef\u9009:true=\u5199\u5165\u672c\u673a\u9ed8\u8ba4\u8def\u5f84"))));
         sb.append(",").append(t("mcp_status","MCP \u670d\u52a1\u72b6\u6001(\u542b\u7ed1\u5b9a\u5730\u5740/\u53ef\u8bbf\u95eeURL)", p()));
         sb.append(",").append(t("oplog_query","\u67e5\u8be2\u56e2\u961f\u64cd\u4f5c\u65e5\u5fd7", p("limit",i(),"action",s("\u53ef\u9009"))));
         sb.append(",").append(t("shell_backup","\u5907\u4efd Shell \u5217\u8868", p("genFile",s("\u53ef\u9009"))));
@@ -1633,22 +1887,64 @@ public class McpService implements Plugin {
 
     private String mcpConfig(Map<String, Object> a) {
         String host = preferredAccessHost();
-        if (a != null && a.containsKey("host") && a.get("host") != null) {
-            String h = String.valueOf(a.get("host")).trim();
-            if (!h.isEmpty() && !"auto".equalsIgnoreCase(h)) host = h;
+        String client = "claude";
+        boolean doWrite = false;
+        if (a != null) {
+            if (a.get("host") != null) {
+                String h = String.valueOf(a.get("host")).trim();
+                if (!h.isEmpty() && !"auto".equalsIgnoreCase(h)) host = h;
+            }
+            if (a.get("client") != null) {
+                String c = String.valueOf(a.get("client")).trim().toLowerCase();
+                if (!c.isEmpty()) client = c;
+            }
+            if (a.get("write") != null) {
+                String w = String.valueOf(a.get("write")).trim().toLowerCase();
+                doWrite = "1".equals(w) || "true".equals(w) || "yes".equals(w) || "on".equals(w);
+            }
         }
-        String json = buildMcpJson(host);
         StringBuilder extra = new StringBuilder();
         extra.append("bind=").append(bindHost).append(":").append(port).append("\n");
         extra.append("config host=").append(host).append("\n");
+        extra.append("client=").append(client).append("\n");
         extra.append("all access URLs:\n");
         for (String u : listAccessUrls()) extra.append("  ").append(u).append("/sse\n");
         extra.append("\n");
-        if (a != null && a.containsKey("outputPath")) {
-            try { java.nio.file.Files.write(java.nio.file.Paths.get((String)a.get("outputPath")), json.getBytes(StandardCharsets.UTF_8)); return "\u5df2\u5199\u5165: " + a.get("outputPath") + "\n" + extra + json; }
-            catch (Exception e) { return "\u5199\u5165\u5931\u8d25: " + e.getMessage() + "\n\n" + extra + "\u8bf7\u624b\u52a8\u5c06\u4ee5\u4e0b\u5185\u5bb9\u6dfb\u52a0\u5230 Claude \u7684 MCP \u914d\u7f6e\u6587\u4ef6\u4e2d:\n" + json; }
+
+        StringBuilder body = new StringBuilder();
+        if ("codex".equals(client) || "openai".equals(client)) {
+            body.append("--- Codex TOML ---\n").append(buildCodexToml(host)).append("\n");
+            if (doWrite) body.append(doWriteCodexConfig(true)).append("\n");
+        } else if ("all".equals(client) || "both".equals(client)) {
+            body.append("--- Claude JSON ---\n").append(buildMcpJson(host)).append("\n");
+            body.append("--- Codex TOML ---\n").append(buildCodexToml(host)).append("\n");
+            if (doWrite) {
+                body.append(doWriteClaudeConfigs(true)).append("\n");
+                body.append(doWriteCodexConfig(true)).append("\n");
+            }
+        } else {
+            // claude default
+            body.append("--- Claude JSON ---\n").append(buildMcpJson(host)).append("\n");
+            if (doWrite) body.append(doWriteClaudeConfigs(true)).append("\n");
         }
-        return extra + "\u8bf7\u5c06\u4ee5\u4e0b JSON \u6dfb\u52a0\u5230 Claude \u7684 MCP \u914d\u7f6e\u6587\u4ef6\u4e2d:\n\n" + json;
+
+        if (a != null && a.get("outputPath") != null) {
+            String outPath = String.valueOf(a.get("outputPath"));
+            try {
+                String content;
+                if ("codex".equals(client) || "openai".equals(client)) content = buildCodexToml(host);
+                else if ("all".equals(client) || "both".equals(client)) content = buildMcpJson(host) + "\n\n" + buildCodexToml(host);
+                else content = buildMcpJson(host);
+                Files.write(Paths.get(outPath), content.getBytes(StandardCharsets.UTF_8));
+                return "\u5df2\u5199\u5165: " + outPath + "\n" + extra + body;
+            } catch (Exception e) {
+                return "\u5199\u5165\u5931\u8d25: " + e.getMessage() + "\n\n" + extra + body;
+            }
+        }
+        if (!doWrite) {
+            extra.append("\u63d0\u793a: write=true \u53ef\u5199\u5165\u672c\u673a\u9ed8\u8ba4 Claude/Codex \u914d\u7f6e\u8def\u5f84; client=claude|codex|all\n\n");
+        }
+        return extra + body.toString();
     }
     class ConfigHandler implements HttpHandler {
         public void handle(HttpExchange ex) throws IOException {

