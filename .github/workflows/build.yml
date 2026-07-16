@@ -50,16 +50,38 @@ jobs:
           set -euo pipefail
           mkdir -p out/production/gsl5
 
-          mapfile -t gbk_sources < <(
-            find src/core src/shells src/util -name '*.java' \
-              ! -path 'src/shells/plugins/generic/McpService.java' \
-              | sort
-          )
+          find src/core src/shells src/util -name '*.java' | sort > out/ci-java-sources.txt
 
-          javac -encoding GBK -cp "lib/*:bin/*" -d out/production/gsl5 "${gbk_sources[@]}"
+          python3 - <<'PY'
+          from pathlib import Path
 
-          javac -encoding UTF-8 -cp "lib/*:bin/*:out/production/gsl5" \
-            -d out/production/gsl5 src/shells/plugins/generic/McpService.java
+          utf8_sources = []
+          gbk_sources = []
+
+          for line in Path("out/ci-java-sources.txt").read_text(encoding="utf-8").splitlines():
+              data = Path(line).read_bytes()
+              try:
+                  data.decode("utf-8")
+              except UnicodeDecodeError:
+                  gbk_sources.append(line)
+              else:
+                  utf8_sources.append(line)
+
+          Path("out/utf8-sources.txt").write_text("\n".join(utf8_sources) + "\n", encoding="utf-8")
+          Path("out/gbk-sources.txt").write_text("\n".join(gbk_sources) + "\n", encoding="utf-8")
+          print("UTF-8/ASCII sources:", len(utf8_sources))
+          print("GBK sources:", len(gbk_sources))
+          PY
+
+          if [ -s out/utf8-sources.txt ]; then
+            javac -encoding UTF-8 -cp "lib/*:bin/*:out/production/gsl5" \
+              -d out/production/gsl5 @out/utf8-sources.txt
+          fi
+
+          if [ -s out/gbk-sources.txt ]; then
+            javac -encoding GBK -cp "lib/*:bin/*:out/production/gsl5" \
+              -d out/production/gsl5 @out/gbk-sources.txt
+          fi
 
       - name: Package jar
         run: |
