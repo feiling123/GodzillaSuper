@@ -28,6 +28,13 @@ jobs:
           java -version
           javac -version
 
+      - name: Prepare CI dependencies
+        run: |
+          mkdir -p lib/ci
+          curl -fsSL https://repo.maven.apache.org/maven2/org/ow2/asm/asm/9.6/asm-9.6.jar \
+            -o lib/ci/asm-9.6.jar
+          echo "aa205cf0a06dbd8e04ece91c0b37c3f5d567546a  lib/ci/asm-9.6.jar" | sha1sum -c -
+
       - name: Check project dependencies
         run: |
           test -d bin || {
@@ -49,6 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out/production/gsl5
+          CI_CLASSPATH="lib/ci/*:lib/*:bin/*:src/shells/plugins/java/assets/asm:out/production/gsl5"
 
           find src/core src/shells src/util -name '*.java' | sort > out/ci-java-sources.txt
 
@@ -74,16 +82,18 @@ jobs:
           PY
 
           if [ -s out/utf8-sources.txt ]; then
-            javac -encoding UTF-8 -cp "lib/*:bin/*:out/production/gsl5" \
+            javac -encoding UTF-8 -cp "$CI_CLASSPATH" \
               -d out/production/gsl5 @out/utf8-sources.txt
           fi
 
           if [ -s out/gbk-sources.txt ]; then
-            javac -encoding GBK -cp "lib/*:bin/*:out/production/gsl5" \
+            javac -encoding GBK -cp "$CI_CLASSPATH" \
               -d out/production/gsl5 @out/gbk-sources.txt
           fi
 
       - name: Package jar
         run: |
           mkdir -p out/artifacts/gsl5_jar
+          unzip -q -o lib/ci/asm-9.6.jar -d out/production/gsl5
+          rm -f out/production/gsl5/META-INF/MANIFEST.MF
           jar cfm out/artifacts/gsl5_jar/gsl5.jar src/META-INF/MANIFEST.MF -C out/production/gsl5 .
