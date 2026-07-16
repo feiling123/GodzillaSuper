@@ -97,3 +97,32 @@ jobs:
           unzip -q -o lib/ci/asm-9.6.jar -d out/production/gsl5
           rm -f out/production/gsl5/META-INF/MANIFEST.MF
           jar cfm out/artifacts/gsl5_jar/gsl5.jar src/META-INF/MANIFEST.MF -C out/production/gsl5 .
+
+      - name: Generate checksum
+        run: |
+          sha256sum out/artifacts/gsl5_jar/gsl5.jar > out/artifacts/gsl5_jar/gsl5.jar.sha256
+          cat out/artifacts/gsl5_jar/gsl5.jar.sha256
+
+      - name: Upload build artifact
+        id: upload_artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsl5-jar
+          path: |
+            out/artifacts/gsl5_jar/gsl5.jar
+            out/artifacts/gsl5_jar/gsl5.jar.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Build summary
+        env:
+          ARTIFACT_URL: ${{ steps.upload_artifact.outputs.artifact-url }}
+        run: |
+          {
+            echo "## Build complete"
+            echo
+            echo "- Artifact: \`gsl5-jar\`"
+            echo "- Files: \`gsl5.jar\`, \`gsl5.jar.sha256\`"
+            echo "- Download: ${ARTIFACT_URL}"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
