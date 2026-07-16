@@ -1,0 +1,61 @@
+name: KeyGen
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - KeyGen.java
+      - .github/workflows/keygen.yml
+  pull_request:
+    paths:
+      - KeyGen.java
+      - .github/workflows/keygen.yml
+  workflow_dispatch:
+    inputs:
+      days:
+        description: License validity in days
+        required: false
+        default: '365'
+      bind_dir:
+        description: Optional directory to bind the license to
+        required: false
+        default: ''
+
+jobs:
+  keygen:
+    name: Compile and run KeyGen
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+
+      - name: Compile and run KeyGen
+        env:
+          KEYGEN_DAYS: ${{ github.event.inputs.days }}
+          KEYGEN_BIND_DIR: ${{ github.event.inputs.bind_dir }}
+          KEYGEN_OUTPUT: out/keygen/license.lic
+          KEYGEN_FORCE: 'true'
+        run: |
+          mkdir -p out/keygen
+          javac KeyGen.java
+          java KeyGen
+          test -s out/keygen/license.lic
+          grep -q '^GSL1:' out/keygen/license.lic
+
+      - name: Upload generated license
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: license
+          path: out/keygen/license.lic
+          if-no-files-found: error
+          retention-days: 7
